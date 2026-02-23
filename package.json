@@ -14,7 +14,7 @@
     "helmet": "^7.1.0",
     "express-rate-limit": "^7.4.0",
     "node-fetch": "^2.7.0",
-    "node-cache": "^5.1.2"
+    "node-cache": "^5.1.2",
     "javascript-obfuscator": "^4.1.0"
   },
   "devDependencies": {},
