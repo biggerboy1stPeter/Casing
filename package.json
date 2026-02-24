@@ -1,18 +1,14 @@
 {
   "name": "redirector",
   "version": "2.0.0",
-  "description": "Advanced hardened redirector with multi-layer encryption, bot evasion, and behavioral verification",
+  "description": "Advanced hardened redirector with multi-layer encryption and bot evasion",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js",
-    "pm2": "pm2 start index.js --name redirector",
-    "test": "node --test",
-    "lint": "eslint ."
+    "dev": "node --watch index.js"
   },
   "engines": {
-    "node": ">=20.0.0",
-    "npm": ">=10.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -24,44 +20,11 @@
     "compression": "^1.7.5",
     "morgan": "^1.10.0",
     "express-validator": "^7.2.0",
-    "useragent": "^2.3.0",
-    "geoip-lite": "^1.4.10",
-    "winston": "^3.17.0",
-    "winston-daily-rotate-file": "^5.0.0",
     "dotenv": "^16.4.7",
-    "cron": "^3.5.0",
-    "prom-client": "^15.1.3",
-    "express-prom-bundle": "^7.0.0"
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
-  "devDependencies": {
-    "eslint": "^9.19.0",
-    "eslint-config-airbnb-base": "^15.0.0",
-    "eslint-plugin-import": "^2.31.0",
-    "nodemon": "^3.1.9",
-    "@types/node": "^22.10.10"
-  },
-  "optionalDependencies": {
-    "pm2": "^5.4.3"
-  },
-  "keywords": [
-    "redirector",
-    "security",
-    "bot-detection",
-    "encryption",
-    "obfuscation",
-    "anti-bot",
-    "verification"
-  ],
   "author": "",
   "license": "UNLICENSED",
-  "private": true,
-  "repository": {
-    "type": "git",
-    "url": ""
-  },
-  "bugs": {
-    "url": ""
-  },
-  "homepage": "",
-  "type": "commonjs"
+  "private": true
 }
