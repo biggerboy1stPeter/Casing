@@ -1,28 +1,72 @@
 {
   "name": "redirector-pro",
   "version": "3.0.0",
-  "description": "Advanced URL redirector with QR codes, admin UI, and real-time monitoring",
+  "description": "Advanced URL redirector with QR codes, admin UI, real-time monitoring, enterprise features",
   "main": "server.js",
   "scripts": {
     "prestart": "node generate-secrets.js --write",
     "start": "node server.js",
     "dev": "nodemon server.js",
     "prod": "NODE_ENV=production node server.js",
-    "pm2": "pm2 start server.js --name redirector-pro",
+    "pm2": "pm2 start server.js --name redirector-pro --max-memory-restart 512M",
     "pm2-stop": "pm2 stop redirector-pro",
+    "pm2-restart": "pm2 restart redirector-pro",
     "pm2-logs": "pm2 logs redirector-pro",
+    "pm2-monit": "pm2 monit",
     "secrets": "node generate-secrets.js",
     "secrets:write": "node generate-secrets.js --write",
     "secrets:force": "node generate-secrets.js --force --write",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "migrate": "node scripts/migrate.js",
+    "migrate:create": "node scripts/create-migration.js",
+    "db:setup": "node scripts/setup-database.js",
+    "db:backup": "node scripts/backup-database.js",
+    "db:restore": "node scripts/restore-database.js",
+    "clean": "node scripts/cleanup.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.js\"",
+    "audit": "npm audit",
+    "audit:fix": "npm audit fix",
+    "outdated": "npm outdated",
+    "update": "npm update",
+    "docker:build": "docker build -t redirector-pro .",
+    "docker:run": "docker run -p 10000:10000 --env-file .env redirector-pro",
+    "docker:compose": "docker-compose up -d",
+    "docker:compose:down": "docker-compose down",
+    "docker:compose:logs": "docker-compose logs -f",
+    "health": "curl http://localhost:10000/health",
+    "metrics": "curl http://localhost:10000/metrics?key=$METRICS_API_KEY",
+    "backup": "node scripts/backup.js",
+    "restore": "node scripts/restore.js",
+    "analyze": "node scripts/analyze-logs.js"
   },
-  "keywords": ["redirect", "url-shortener", "qr-code", "bot-detection", "analytics"],
+  "keywords": [
+    "redirect", 
+    "url-shortener", 
+    "qr-code", 
+    "bot-detection", 
+    "analytics",
+    "enterprise",
+    "real-time",
+    "monitoring",
+    "security",
+    "anti-bot",
+    "link-protection",
+    "url-redirector",
+    "click-tracker",
+    "link-management",
+    "dashboard"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "helmet": "^7.0.0",
     "express-rate-limit": "^6.9.0",
+    "express-slow-down": "^1.6.0",
     "node-cache": "^5.1.2",
     "javascript-obfuscator": "^4.0.2",
     "compression": "^1.7.4",
@@ -37,12 +81,94 @@
     "multer": "^1.4.5-lts.1",
     "dotenv": "^16.0.3",
     "redis": "^4.6.8",
-    "connect-redis": "^7.1.0"
+    "connect-redis": "^7.1.0",
+    "pg": "^8.11.0",
+    "bull": "^4.11.0",
+    "ioredis": "^5.3.0",
+    "prom-client": "^14.2.0",
+    "winston": "^3.9.0",
+    "joi": "^17.9.0",
+    "uuid": "^9.0.0",
+    "csurf": "^1.11.0",
+    "xss-clean": "^0.1.1",
+    "hpp": "^0.2.3",
+    "express-useragent": "^1.0.15",
+    "response-time": "^2.3.2",
+    "sanitize-html": "^2.11.0",
+    "cors": "^2.8.5",
+    "axios": "^1.4.0",
+    "jsonwebtoken": "^9.0.0",
+    "nodemailer": "^6.9.3",
+    "bull-board": "^4.6.0",
+    "swagger-ui-express": "^4.6.3",
+    "swagger-jsdoc": "^6.2.8",
+    "rate-limit-redis": "^3.0.0",
+    "express-mongo-sanitize": "^2.2.0",
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6",
+    "body-parser": "^1.20.2",
+    "moment": "^2.29.4",
+    "lodash": "^4.17.21",
+    "validator": "^13.9.0",
+    "zod": "^3.21.4"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "nodemon": "^2.0.22",
+    "jest": "^29.5.0",
+    "supertest": "^6.3.3",
+    "eslint": "^8.42.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.27.5",
+    "eslint-plugin-jest": "^27.2.1",
+    "prettier": "^2.8.8",
+    "husky": "^8.0.3",
+    "lint-staged": "^13.2.2",
+    "cross-env": "^7.0.3",
+    "faker": "^5.5.3",
+    "mock-fs": "^5.2.0",
+    "nock": "^13.3.1",
+    "sinon": "^15.1.0",
+    "artillery": "^2.0.0-31",
+    "newman": "^5.3.2",
+    "newman-reporter-htmlextra": "^1.22.11"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/redirector-pro"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/redirector-pro/issues"
+  },
+  "homepage": "https://github.com/yourusername/redirector-pro#readme",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "coveragePathIgnorePatterns": [
+      "/node_modules/"
+    ],
+    "collectCoverageFrom": [
+      "**/*.js",
+      "!**/node_modules/**",
+      "!**/coverage/**",
+      "!**/scripts/**"
+    ]
+  },
+  "lint-staged": {
+    "*.js": [
+      "eslint --fix",
+      "prettier --write"
+    ]
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
   }
 }
