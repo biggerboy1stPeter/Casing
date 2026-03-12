@@ -4,11 +4,13 @@
   "description": "Advanced URL redirector with QR codes, admin UI, and real-time monitoring",
   "main": "server.js",
   "scripts": {
+    "prestart": "node generate-secrets.js",
     "start": "node server.js",
     "dev": "nodemon server.js",
     "pm2": "pm2 start server.js --name redirector-pro",
     "pm2-stop": "pm2 stop redirector-pro",
     "pm2-logs": "pm2 logs redirector-pro",
+    "generate-secrets": "node generate-secrets.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": ["redirect", "url-shortener", "qr-code", "bot-detection", "analytics"],
