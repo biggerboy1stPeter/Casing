@@ -4,13 +4,16 @@
   "description": "Advanced URL redirector with QR codes, admin UI, and real-time monitoring",
   "main": "server.js",
   "scripts": {
-    "prestart": "node generate-secrets.js",
+    "prestart": "node generate-secrets.js --write",
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "prod": "NODE_ENV=production node server.js",
     "pm2": "pm2 start server.js --name redirector-pro",
     "pm2-stop": "pm2 stop redirector-pro",
     "pm2-logs": "pm2 logs redirector-pro",
-    "generate-secrets": "node generate-secrets.js",
+    "secrets": "node generate-secrets.js",
+    "secrets:write": "node generate-secrets.js --write",
+    "secrets:force": "node generate-secrets.js --force --write",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": ["redirect", "url-shortener", "qr-code", "bot-detection", "analytics"],
@@ -32,7 +35,9 @@
     "express-session": "^1.17.3",
     "bcryptjs": "^2.4.3",
     "multer": "^1.4.5-lts.1",
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3",
+    "redis": "^4.6.8",
+    "connect-redis": "^7.1.0"
   },
   "devDependencies": {
     "nodemon": "^2.0.22"
