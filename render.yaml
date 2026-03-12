@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: redirector-pro
+    runtime: node
+    repo: https://github.com/yourusername/redirector-pro
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: METRICS_API_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: LINK_TTL
+        value: 30m
+      - key: TARGET_URL
+        value: https://example.com
+    healthCheckPath: /health
+    autoDeploy: true
