@@ -35,6 +35,7 @@ const responseTime = require('response-time');
 const slowDown = require("express-slow-down");
 const Redis = require('ioredis');
 const createRedisStore = require('connect-redis').default;
+const cookieParser = require('cookie-parser');
 
 // Bull Board imports - FIXED
 const { createBullBoard } = require('@bull-board/api');
@@ -49,7 +50,7 @@ const configSchema = Joi.object({
   TARGET_URL: Joi.string().uri().required(),
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('production'),
   PORT: Joi.number().port().default(10000),
-  REDIS_URL: Joi.string().uri().optional(),
+  REDIS_URL: Joi.string().uri().optional().allow('', null),
   REDIS_HOST: Joi.string().optional(),
   REDIS_PORT: Joi.number().port().default(6379),
   REDIS_PASSWORD: Joi.string().optional(),
@@ -62,7 +63,7 @@ const configSchema = Joi.object({
   MAX_LINKS: Joi.number().integer().min(100).max(10000000).default(1000000),
   BOT_URLS: Joi.string().optional(),
   CORS_ORIGIN: Joi.string().optional(),
-  DATABASE_URL: Joi.string().uri().optional(),
+  DATABASE_URL: Joi.string().uri().optional().allow('', null),
   SMTP_HOST: Joi.string().optional(),
   SMTP_PORT: Joi.number().port().optional(),
   SMTP_USER: Joi.string().optional(),
@@ -72,7 +73,8 @@ const configSchema = Joi.object({
   HTTPS_ENABLED: Joi.boolean().default(false),
   DEBUG: Joi.boolean().default(false),
   BULL_BOARD_ENABLED: Joi.boolean().default(true),
-  BULL_BOARD_PATH: Joi.string().default('/admin/queues')
+  BULL_BOARD_PATH: Joi.string().default('/admin/queues'),
+  CSRF_SECRET: Joi.string().min(32).optional()
 });
 
 const { error: configError, value: validatedConfig } = configSchema.validate(process.env, {
@@ -146,12 +148,9 @@ const server = http.createServer(app);
 let redisClient;
 let sessionStore;
 
-if (validatedConfig.REDIS_URL || validatedConfig.REDIS_HOST) {
+if (validatedConfig.REDIS_URL && validatedConfig.REDIS_URL.startsWith('redis://')) {
   try {
-    redisClient = new Redis({
-      host: validatedConfig.REDIS_HOST || 'localhost',
-      port: validatedConfig.REDIS_PORT || 6379,
-      password: validatedConfig.REDIS_PASSWORD,
+    redisClient = new Redis(validatedConfig.REDIS_URL, {
       retryStrategy: (times) => {
         const delay = Math.min(times * 50, 2000);
         return delay;
@@ -255,7 +254,7 @@ if (redisClient) {
     return { processed: true };
   });
 
-  // ─── Bull Board Setup (FIXED) ─────────────────────────────────────────────
+  // ─── Bull Board Setup ─────────────────────────────────────────────
   if (validatedConfig.BULL_BOARD_ENABLED) {
     serverAdapter = new ExpressAdapter();
     serverAdapter.setBasePath(validatedConfig.BULL_BOARD_PATH);
@@ -285,56 +284,69 @@ if (redisClient) {
 
 // ─── Database Connection ─────────────────────────────────────────────────────
 let dbPool;
-if (validatedConfig.DATABASE_URL) {
-  dbPool = new Pool({
-    connectionString: validatedConfig.DATABASE_URL,
-    ssl: validatedConfig.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000
-  });
+if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('postgresql://')) {
+  try {
+    dbPool = new Pool({
+      connectionString: validatedConfig.DATABASE_URL,
+      ssl: validatedConfig.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000
+    });
 
-  dbPool.on('error', (err) => {
-    logger.error('Unexpected database error:', err);
-  });
+    dbPool.on('error', (err) => {
+      if (validatedConfig.DEBUG) {
+        logger.error('Unexpected database error:', err);
+      }
+    });
 
-  // Initialize database tables
-  dbPool.query(`
-    CREATE TABLE IF NOT EXISTS links (
-      id VARCHAR(32) PRIMARY KEY,
-      target_url TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      expires_at TIMESTAMP NOT NULL,
-      creator_ip INET,
-      password_hash TEXT,
-      max_clicks INTEGER,
-      current_clicks INTEGER DEFAULT 0
-    );
+    // Initialize database tables
+    dbPool.query(`
+      CREATE TABLE IF NOT EXISTS links (
+        id VARCHAR(32) PRIMARY KEY,
+        target_url TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP NOT NULL,
+        creator_ip INET,
+        password_hash TEXT,
+        max_clicks INTEGER,
+        current_clicks INTEGER DEFAULT 0
+      );
 
-    CREATE TABLE IF NOT EXISTS clicks (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      link_id VARCHAR(32) REFERENCES links(id) ON DELETE CASCADE,
-      ip INET,
-      user_agent TEXT,
-      device_type VARCHAR(20),
-      country VARCHAR(2),
-      city TEXT,
-      referer TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS clicks (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        link_id VARCHAR(32) REFERENCES links(id) ON DELETE CASCADE,
+        ip INET,
+        user_agent TEXT,
+        device_type VARCHAR(20),
+        country VARCHAR(2),
+        city TEXT,
+        referer TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS logs (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      data JSONB NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        data JSONB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);
-    CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);
-    CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);
-  `).catch(err => {
-    logger.error('Database initialization error:', err);
-  });
+      CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);
+      CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);
+    `).catch(err => {
+      if (validatedConfig.DEBUG) {
+        logger.error('Database initialization error:', err);
+      }
+    });
+    
+    logger.info('✅ Database connected');
+  } catch (err) {
+    logger.warn('Database connection failed, continuing without database:', err.message);
+    dbPool = null;
+  }
+} else {
+  logger.info('📁 Running without database (file-based logging only)');
 }
 
 // ─── Async logging to database ───────────────────────────────────────────────
@@ -345,7 +357,9 @@ async function logToDatabase(entry) {
     const query = 'INSERT INTO logs (data) VALUES ($1)';
     await dbPool.query(query, [JSON.stringify(entry)]);
   } catch (err) {
-    logger.error('Failed to log to database:', err);
+    if (validatedConfig.DEBUG) {
+      logger.debug('Database log failed (non-critical):', err.message);
+    }
   }
 }
 
@@ -366,7 +380,9 @@ async function updateAnalytics(type, data) {
       const query = 'INSERT INTO analytics (type, data) VALUES ($1, $2)';
       await dbPool.query(query, [type, JSON.stringify(data)]);
     } catch (err) {
-      logger.error('Failed to update analytics:', err);
+      if (validatedConfig.DEBUG) {
+        logger.debug('Analytics update failed:', err.message);
+      }
     }
   }
 }
@@ -395,6 +411,7 @@ app.use(cors({
   origin: validatedConfig.CORS_ORIGIN ? validatedConfig.CORS_ORIGIN.split(',') : "*",
   credentials: true
 }));
+app.use(cookieParser(validatedConfig.SESSION_SECRET));
 
 app.use(session({
   store: sessionStore,
@@ -413,16 +430,57 @@ app.use(session({
   rolling: true
 }));
 
-// ─── CSRF Protection ─────────────────────────────────────────────────────────
+// ─── CSRF Protection (FIXED) ─────────────────────────────────────────────
+// Generate a CSRF secret if not provided
+const csrfSecret = validatedConfig.CSRF_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Custom CSRF error handler
 const csrfProtection = csrf({ 
   cookie: {
+    key: '_csrf',
     httpOnly: true,
     secure: validatedConfig.NODE_ENV === 'production',
     sameSite: 'lax'
+  },
+  value: (req) => {
+    // Check for token in multiple locations
+    return (req.body && req.body._csrf) || 
+           (req.query && req.query._csrf) || 
+           (req.headers['csrf-token']) || 
+           (req.headers['xsrf-token']) ||
+           (req.headers['x-csrf-token']) ||
+           (req.headers['x-xsrf-token']) ||
+           (req.cookies && req.cookies['_csrf']);
   }
 });
 
-// ─── Bull Board Middleware (FIXED) ──────────────────────────────────────────
+// Add CSRF token to all responses for forms
+app.use((req, res, next) => {
+  try {
+    if (req.csrfToken) {
+      res.locals.csrfToken = req.csrfToken();
+    } else {
+      res.locals.csrfToken = '';
+    }
+  } catch (err) {
+    res.locals.csrfToken = '';
+  }
+  next();
+});
+
+// CSRF error handler middleware
+app.use((err, req, res, next) => {
+  if (err.code === 'EBADCSRFTOKEN') {
+    logger.warn('CSRF attack detected:', { id: req.id, ip: req.ip });
+    return res.status(403).json({ 
+      error: 'Invalid CSRF token',
+      id: req.id 
+    });
+  }
+  next(err);
+});
+
+// ─── Bull Board Middleware ──────────────────────────────────────────
 if (serverAdapter && validatedConfig.BULL_BOARD_ENABLED) {
   // Add authentication middleware for Bull Board
   app.use(validatedConfig.BULL_BOARD_PATH, (req, res, next) => {
@@ -1561,7 +1619,12 @@ app.get('/admin/login', (req, res) => {
   }
   
   const nonce = res.locals.nonce;
-  const csrfToken = req.csrfToken ? req.csrfToken() : '';
+  let csrfToken = '';
+  try {
+    csrfToken = req.csrfToken ? req.csrfToken() : '';
+  } catch (err) {
+    // CSRF token not available yet
+  }
   
   res.send(`
     <!DOCTYPE html>
@@ -1605,13 +1668,18 @@ app.get('/admin/login', (req, res) => {
       <script nonce="${nonce}">
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
           e.preventDefault();
+          const csrfToken = document.querySelector('input[name="_csrf"]').value;
           const res = await fetch('/admin/login', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              'CSRF-Token': csrfToken,
+              'X-CSRF-Token': csrfToken
+            },
             body: JSON.stringify({
               username: document.getElementById('username').value,
               password: document.getElementById('password').value,
-              _csrf: document.querySelector('input[name="_csrf"]').value
+              _csrf: csrfToken
             })
           });
           if (res.ok) {
@@ -1661,7 +1729,12 @@ app.get('/admin', (req, res, next) => {
   }
   
   const nonce = res.locals.nonce;
-  const csrfToken = req.csrfToken ? req.csrfToken() : '';
+  let csrfToken = '';
+  try {
+    csrfToken = req.csrfToken ? req.csrfToken() : '';
+  } catch (err) {
+    // CSRF token not available yet
+  }
   
   res.send(`<!DOCTYPE html>
 <html>
@@ -1900,7 +1973,6 @@ app.get('/admin', (req, res, next) => {
       });
     }
     
-    // FIXED: updateCountryStats function with proper string concatenation
     function updateCountryStats(countries) {
       const container = document.getElementById('countryStats');
       const sorted = Object.entries(countries)
@@ -1927,7 +1999,8 @@ app.get('/admin', (req, res, next) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'CSRF-Token': csrf
+          'CSRF-Token': csrf,
+          'X-CSRF-Token': csrf
         },
         body: JSON.stringify({ 
           url, 
@@ -1977,7 +2050,10 @@ app.get('/admin', (req, res, next) => {
       const csrf = document.querySelector('input[name="_csrf"]').value;
       const res = await fetch('/admin/clear-cache', {
         method: 'POST',
-        headers: { 'CSRF-Token': csrf }
+        headers: { 
+          'CSRF-Token': csrf,
+          'X-CSRF-Token': csrf
+        }
       });
       if (res.ok) {
         showAlert('Cache cleared successfully', 'success');
@@ -2005,7 +2081,6 @@ app.get('/admin', (req, res, next) => {
       }, 3000);
     }
     
-    // FIXED: showTab function with proper string concatenation
     function showTab(tab) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -2023,7 +2098,6 @@ app.get('/admin', (req, res, next) => {
       });
     }
     
-    // FIXED: uptime display with proper string concatenation
     setInterval(() => {
       const uptime = Math.floor(process.uptime());
       const hours = Math.floor(uptime / 3600);
