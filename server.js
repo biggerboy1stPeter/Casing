@@ -168,7 +168,7 @@ if (validatedConfig.REDIS_URL && validatedConfig.REDIS_URL.startsWith('redis://'
     sessionStore = new RedisStore({ 
       client: redisClient,
       prefix: 'redirector:',
-      ttl: 86400 // 24 hours
+      ttl: 86400
     });
 
   } catch (err) {
@@ -219,10 +219,8 @@ if (redisClient) {
     }
   });
 
-  // Queue processors
   redirectQueue.process(async (job) => {
     const { linkId, ip, userAgent, deviceInfo } = job.data;
-    // Process redirect asynchronously
     await logToDatabase({
       type: 'redirect',
       linkId,
@@ -236,9 +234,7 @@ if (redisClient) {
 
   emailQueue.process(async (job) => {
     const { to, subject, html } = job.data;
-    // Send email asynchronously
     if (validatedConfig.SMTP_HOST) {
-      // Implement email sending logic
       logger.info(`Email would be sent to ${to} with subject: ${subject}`);
       return { sent: true };
     }
@@ -247,12 +243,10 @@ if (redisClient) {
 
   analyticsQueue.process(async (job) => {
     const { type, data } = job.data;
-    // Process analytics asynchronously
     await updateAnalytics(type, data);
     return { processed: true };
   });
 
-  // ─── Bull Board Setup ─────────────────────────────────────────────
   if (validatedConfig.BULL_BOARD_ENABLED) {
     serverAdapter = new ExpressAdapter();
     serverAdapter.setBasePath(validatedConfig.BULL_BOARD_PATH);
@@ -298,7 +292,6 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
       }
     });
 
-    // Initialize database tables
     dbPool.query(`
       CREATE TABLE IF NOT EXISTS links (
         id VARCHAR(32) PRIMARY KEY,
@@ -347,7 +340,6 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
   logger.info('📁 Running without database (file-based logging only)');
 }
 
-// ─── Async logging to database ───────────────────────────────────────────────
 async function logToDatabase(entry) {
   if (!dbPool) return;
   
@@ -361,9 +353,7 @@ async function logToDatabase(entry) {
   }
 }
 
-// ─── Update analytics ────────────────────────────────────────────────────────
 async function updateAnalytics(type, data) {
-  // Update Prometheus metrics
   if (type === 'request') {
     totalRequests.inc();
   } else if (type === 'bot') {
@@ -372,7 +362,6 @@ async function updateAnalytics(type, data) {
     linkGenerations.inc();
   }
 
-  // Update database if available
   if (dbPool) {
     try {
       const query = 'INSERT INTO analytics (type, data) VALUES ($1, $2)';
@@ -428,30 +417,21 @@ app.use(session({
   rolling: true
 }));
 
-// ─── CSRF Protection (OPTION 3: Session-based) ─────────────────────────────
-// Middleware to generate and validate CSRF token using session
+// ─── CSRF Protection (Session-based) ─────────────────────────────────────
 app.use((req, res, next) => {
-  // Generate token if not exists
   if (!req.session.csrfToken) {
     req.session.csrfToken = crypto.randomBytes(32).toString('hex');
   }
-  
-  // Make token available to views
   res.locals.csrfToken = req.session.csrfToken;
-  
-  // Add to response headers for AJAX requests
   res.setHeader('X-CSRF-Token', req.session.csrfToken);
   next();
 });
 
-// CSRF validation middleware for non-GET requests
 const csrfProtection = (req, res, next) => {
-  // Skip CSRF for GET, HEAD, OPTIONS
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     return next();
   }
   
-  // Get token from various sources
   const token = req.body._csrf || 
                 req.query._csrf || 
                 req.headers['csrf-token'] || 
@@ -459,7 +439,6 @@ const csrfProtection = (req, res, next) => {
                 req.headers['x-csrf-token'] ||
                 req.headers['x-xsrf-token'];
   
-  // Validate token
   if (!token || token !== req.session.csrfToken) {
     logger.warn('CSRF validation failed:', { 
       id: req.id, 
@@ -468,7 +447,6 @@ const csrfProtection = (req, res, next) => {
       method: req.method
     });
     
-    // For API requests, return JSON error
     if (req.path.startsWith('/api/') || req.xhr) {
       return res.status(403).json({ 
         error: 'Invalid CSRF token',
@@ -476,7 +454,6 @@ const csrfProtection = (req, res, next) => {
       });
     }
     
-    // For form submissions, redirect back with error
     return res.redirect(req.get('referer') || '/admin/login?error=invalid_csrf');
   }
   
@@ -485,7 +462,6 @@ const csrfProtection = (req, res, next) => {
 
 // ─── Bull Board Middleware ──────────────────────────────────────────
 if (serverAdapter && validatedConfig.BULL_BOARD_ENABLED) {
-  // Add authentication middleware for Bull Board
   app.use(validatedConfig.BULL_BOARD_PATH, (req, res, next) => {
     if (!req.session.authenticated) {
       return res.status(401).send('Unauthorized');
@@ -493,7 +469,6 @@ if (serverAdapter && validatedConfig.BULL_BOARD_ENABLED) {
     next();
   });
   
-  // Mount Bull Board router
   app.use(validatedConfig.BULL_BOARD_PATH, serverAdapter.getRouter());
 }
 
@@ -512,11 +487,9 @@ const LOG_FILE = 'clicks.log';
 const REQUEST_LOG_FILE = 'requests.log';
 const PORT = validatedConfig.PORT;
 
-// Admin credentials
 const ADMIN_USERNAME = validatedConfig.ADMIN_USERNAME;
 const ADMIN_PASSWORD_HASH = validatedConfig.ADMIN_PASSWORD_HASH;
 
-// Parse TTL from environment variable
 function parseTTL(ttlValue) {
   const defaultTTL = 1800;
   
@@ -543,7 +516,6 @@ const IPINFO_TOKEN = validatedConfig.IPINFO_TOKEN;
 const NODE_ENV = validatedConfig.NODE_ENV;
 const MAX_LINKS = validatedConfig.MAX_LINKS;
 
-// Format TTL for display
 function formatDuration(seconds) {
   if (seconds < 60) return `${seconds} seconds`;
   if (seconds < 3600) {
@@ -560,56 +532,15 @@ function formatDuration(seconds) {
   return hours > 0 ? `${days} day${days !== 1 ? 's' : ''} ${hours} hour${hours !== 1 ? 's' : ''}` : `${days} day${days !== 1 ? 's' : ''}`;
 }
 
-// Cache instances with optimized settings
-const geoCache = new NodeCache({ 
-  stdTTL: 86400, 
-  checkperiod: 3600, 
-  useClones: false,
-  deleteOnExpire: true,
-  maxKeys: 100000
-});
+// Cache instances
+const geoCache = new NodeCache({ stdTTL: 86400, checkperiod: 3600, useClones: false, maxKeys: 100000 });
+const linkCache = new NodeCache({ stdTTL: LINK_TTL_SEC, checkperiod: Math.min(300, Math.floor(LINK_TTL_SEC / 10)), useClones: false, maxKeys: MAX_LINKS });
+const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10, useClones: false, maxKeys: 10000 });
+const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 10000 });
+const deviceCache = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false, maxKeys: 50000 });
+const qrCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 1000 });
 
-const linkCache = new NodeCache({ 
-  stdTTL: LINK_TTL_SEC, 
-  checkperiod: Math.min(300, Math.floor(LINK_TTL_SEC / 10)), 
-  useClones: false, 
-  maxKeys: MAX_LINKS,
-  deleteOnExpire: true
-});
-
-const linkRequestCache = new NodeCache({ 
-  stdTTL: 60, 
-  checkperiod: 10, 
-  useClones: false,
-  deleteOnExpire: true,
-  maxKeys: 10000
-});
-
-const failCache = new NodeCache({ 
-  stdTTL: 3600, 
-  checkperiod: 600, 
-  useClones: false,
-  deleteOnExpire: true,
-  maxKeys: 10000
-});
-
-const deviceCache = new NodeCache({ 
-  stdTTL: 300, 
-  checkperiod: 60, 
-  useClones: false,
-  deleteOnExpire: true,
-  maxKeys: 50000
-});
-
-const qrCache = new NodeCache({ 
-  stdTTL: 3600, 
-  checkperiod: 600, 
-  useClones: false,
-  deleteOnExpire: true,
-  maxKeys: 1000
-});
-
-// ─── Stats Tracking ──────────────────────────────────────────────────────────
+// Stats Tracking
 const stats = {
   totalRequests: 0,
   botBlocks: 0,
@@ -627,7 +558,7 @@ const stats = {
   }
 };
 
-// ─── Socket.IO Authentication ────────────────────────────────────────────────
+// Socket.IO Authentication
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
   if (token === METRICS_API_KEY) {
@@ -664,11 +595,9 @@ io.use((socket, next) => {
           qrCache.flushAll();
           socket.emit('notification', { type: 'success', message: 'Cache cleared successfully' });
           break;
-          
         case 'getStats':
           socket.emit('stats', stats);
           break;
-          
         case 'getConfig':
           socket.emit('config', {
             linkTTL: LINK_TTL_SEC,
@@ -679,7 +608,6 @@ io.use((socket, next) => {
             nodeEnv: NODE_ENV
           });
           break;
-          
         default:
           socket.emit('notification', { type: 'error', message: 'Unknown command' });
       }
@@ -708,12 +636,11 @@ setInterval(() => {
   io.emit('stats', stats);
 }, 1000);
 
-// Cleanup interval for old stats
 setInterval(() => {
   stats.realtime.lastMinute = stats.realtime.lastMinute.slice(-60);
 }, 60000);
 
-// ─── Enhanced Device Detection ───────────────────────────────────────────────
+// Device Detection
 function getDeviceInfo(req) {
   const ua = req.headers['user-agent'] || '';
   
@@ -801,7 +728,7 @@ function getDeviceInfo(req) {
   return deviceInfo;
 }
 
-// ─── Custom Error Class ──────────────────────────────────────────────────────
+// Custom Error Class
 class AppError extends Error {
   constructor(message, statusCode, isOperational = true) {
     super(message);
@@ -811,7 +738,7 @@ class AppError extends Error {
   }
 }
 
-// ─── Middleware ──────────────────────────────────────────────────────────────
+// Middleware
 app.use((req, res, next) => {
   req.id = uuidv4();
   req.startTime = Date.now();
@@ -867,7 +794,7 @@ app.use(helmet({
 app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: true, limit: '50kb' }));
 
-// ─── Slow Down & Rate Limiting ───────────────────────────────────────────────
+// Rate Limiting
 const speedLimiter = slowDown({
   windowMs: 15 * 60 * 1000,
   delayAfter: 50,
@@ -896,7 +823,7 @@ const strictLimiter = rateLimit({
 
 app.use(speedLimiter);
 
-// ─── Logging Helper ─────────────────────────────────────────────────────────
+// Logging Helper
 async function logRequest(type, req, res, extra = {}) {
   try {
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
@@ -916,12 +843,9 @@ async function logRequest(type, req, res, extra = {}) {
     
     try {
       io.emit('log', logEntry);
-    } catch (socketErr) {
-      // Ignore socket errors
-    }
-    
+    } catch (socketErr) {}
+
     fs.appendFile(REQUEST_LOG_FILE, JSON.stringify(logEntry) + '\n').catch(() => {});
-    
     logToDatabase(logEntry);
     
     if (validatedConfig.DEBUG) {
@@ -932,7 +856,7 @@ async function logRequest(type, req, res, extra = {}) {
   }
 }
 
-// ─── Bot Detection ───────────────────────────────────────────────────────────
+// Bot Detection
 function isLikelyBot(req) {
   const deviceInfo = req.deviceInfo;
   
@@ -1003,7 +927,7 @@ function isLikelyBot(req) {
   return isBot;
 }
 
-// ─── Geolocation ─────────────────────────────────────────────────────────────
+// Geolocation
 async function getCountryCode(req) {
   const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
   
@@ -1046,7 +970,7 @@ async function getCountryCode(req) {
   return 'XX';
 }
 
-// ─── Encoders ────────────────────────────────────────────────────────────────
+// Encoders
 const encoders = [
   { name: 'base64url', enc: s => Buffer.from(s).toString('base64url'), dec: s => Buffer.from(s, 'base64url').toString() },
   { name: 'hex', enc: s => Buffer.from(s).toString('hex'), dec: s => Buffer.from(s, 'hex').toString() },
@@ -1071,7 +995,7 @@ function multiLayerEncode(str) {
   return { encoded: Buffer.from(result).toString('base64url') };
 }
 
-// ─── Health Endpoints ────────────────────────────────────────────────────────
+// Health Endpoints
 app.get(['/ping','/health','/healthz','/status'], (req, res) => {
   const healthData = {
     status: 'healthy',
@@ -1095,7 +1019,7 @@ app.get(['/ping','/health','/healthz','/status'], (req, res) => {
   res.status(200).json(healthData);
 });
 
-// ─── Metrics Endpoint ────────────────────────────────────────────────────────
+// Metrics Endpoint
 app.get('/metrics', async (req, res) => {
   const apiKey = req.headers['x-api-key'] || req.query.key;
   if (apiKey !== METRICS_API_KEY) {
@@ -1141,7 +1065,7 @@ app.get('/metrics', async (req, res) => {
   res.send(await promClient.register.metrics());
 });
 
-// ─── Generate Link ───────────────────────────────────────────────────────────
+// Generate Link
 app.post('/api/generate', csrfProtection, [
   body('url').isURL().withMessage('Valid URL required'),
   body('password').optional().isString().isLength({ min: 6 }),
@@ -1208,13 +1132,12 @@ app.post('/api/generate', csrfProtection, [
   }
 });
 
-// Legacy GET endpoint (kept for compatibility)
 app.get('/g', (req, res, next) => {
   req.body = { url: req.query.t };
   app._router.handle(req, res, next);
 });
 
-// ─── Get Link Stats ──────────────────────────────────────────────────────────
+// Get Link Stats
 app.get('/api/stats/:id', async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -1258,7 +1181,7 @@ app.get('/api/stats/:id', async (req, res, next) => {
   }
 });
 
-// ─── Success Tracking ────────────────────────────────────────────────────────
+// Success Tracking
 app.post('/track/success', (req, res) => {
   stats.successfulRedirects++;
   logRequest('success', req, res);
@@ -1268,7 +1191,7 @@ app.post('/track/success', (req, res) => {
   res.json({ ok: true });
 });
 
-// ─── Password Protected Link ─────────────────────────────────────────────────
+// Password Protected Link
 app.post('/v/:id/verify', express.json(), async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -1292,7 +1215,7 @@ app.post('/v/:id/verify', express.json(), async (req, res, next) => {
   }
 });
 
-// ─── Verification Gate ───────────────────────────────────────────────────────
+// Verification Gate
 app.get('/v/:id', strictLimiter, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -1346,7 +1269,6 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
 
     logRequest('redirect', req, res, { target: data.target.substring(0, 50) });
 
-    // Track click in database
     if (dbPool && redirectQueue) {
       redirectQueue.add({
         linkId,
@@ -1357,7 +1279,6 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       });
     }
 
-    // Password check
     if (data.passwordHash) {
       return res.send(`
         <!DOCTYPE html>
@@ -1523,7 +1444,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
   }
 });
 
-// ─── Expired Link Page ───────────────────────────────────────────────────────
+// Expired Link Page
 app.get('/expired', (req, res) => {
   const originalTarget = req.query.target || BOT_URLS[0];
   const nonce = res.locals.nonce;
@@ -1556,7 +1477,7 @@ app.get('/expired', (req, res) => {
 </html>`);
 });
 
-// ─── QR Code Endpoints ───────────────────────────────────────────────────────
+// QR Code Endpoints
 app.get('/qr', async (req, res, next) => {
   try {
     const url = req.query.url || req.query.u || TARGET_URL;
@@ -1615,7 +1536,7 @@ app.get('/qr/download', async (req, res, next) => {
   }
 });
 
-// ─── Admin Routes ────────────────────────────────────────────────────────────
+// Admin Routes
 app.get('/admin/login', (req, res) => {
   if (req.session.authenticated) {
     return res.redirect('/admin');
@@ -1710,10 +1631,7 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
       req.session.authenticated = true;
       req.session.user = username;
       req.session.loginTime = Date.now();
-      
-      // Regenerate CSRF token after successful login
       req.session.csrfToken = crypto.randomBytes(32).toString('hex');
-      
       linkRequestCache.del(`login:${ip}`);
       res.json({ success: true });
     } else {
@@ -1724,7 +1642,7 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
   }
 });
 
-// Admin dashboard route
+// FIXED: Interactive Admin Dashboard
 app.get('/admin', (req, res, next) => {
   if (!req.session.authenticated) {
     return res.redirect('/admin/login');
@@ -1741,83 +1659,443 @@ app.get('/admin', (req, res, next) => {
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style nonce="${nonce}">
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:sans-serif;background:#f5f5f5}
-    .navbar{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;padding:1rem;display:flex;justify-content:space-between;align-items:center}
-    .container{padding:2rem;max-width:1400px;margin:0 auto}
-    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem}
-    .stat-card{background:white;padding:1.5rem;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}
-    .stat-card h3{color:#666;font-size:0.9rem;margin-bottom:0.5rem}
-    .stat-card .value{font-size:2rem;font-weight:bold}
-    .section{background:white;padding:1.5rem;border-radius:8px;margin-bottom:2rem;box-shadow:0 2px 4px rgba(0,0,0,0.1)}
-    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-    input, select{width:100%;padding:0.75rem;margin-bottom:1rem;border:2px solid #e0e0e0;border-radius:8px}
-    button{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;border:none;padding:0.75rem 1.5rem;border-radius:8px;cursor:pointer;margin-right:0.5rem;transition:transform 0.2s}
-    button:hover{transform:translateY(-2px)}
-    button.danger{background:linear-gradient(135deg,#f56565 0,#c53030 100%)}
-    .logs{background:#1e1e1e;color:#0f0;padding:1rem;border-radius:8px;font-family:monospace;height:300px;overflow-y:auto}
-    .log-entry{border-bottom:1px solid #333;padding:0.25rem 0;font-size:0.9rem}
-    .tab{display:inline-block;padding:0.5rem 1rem;cursor:pointer;border-bottom:2px solid transparent}
-    .tab.active{border-bottom-color:#667eea;color:#667eea}
-    .tab-content{display:none}
-    .tab-content.active{display:block}
-    .chart-container{height:300px;margin:1rem 0}
-    .alert{position:fixed;top:20px;right:20px;padding:1rem;border-radius:8px;color:white;z-index:1000;display:none}
-    .alert.success{background:#48bb78}
-    .alert.error{background:#f56565}
-    @media (max-width:768px){.grid-2{grid-template-columns:1fr}}
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+    }
+    
+    .navbar {
+      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+      color: white;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .navbar h1 {
+      font-size: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .navbar button {
+      background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      padding: 0.5rem 1.5rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: all 0.2s;
+    }
+    
+    .navbar button:hover {
+      background: rgba(255,255,255,0.3);
+      transform: translateY(-1px);
+    }
+    
+    .container {
+      padding: 2rem;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    
+    .stat-card {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      transition: transform 0.2s;
+    }
+    
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+    }
+    
+    .stat-card h3 {
+      color: #666;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 0.5rem;
+    }
+    
+    .stat-card .value {
+      font-size: 2.5rem;
+      font-weight: bold;
+      color: #333;
+      line-height: 1.2;
+    }
+    
+    .stat-card .sub-value {
+      font-size: 0.9rem;
+      color: #999;
+      margin-top: 0.25rem;
+    }
+    
+    .section {
+      background: white;
+      padding: 2rem;
+      border-radius: 12px;
+      margin-bottom: 2rem;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .section h2 {
+      margin-bottom: 1.5rem;
+      color: #333;
+      font-size: 1.3rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+    }
+    
+    .form-group {
+      margin-bottom: 1rem;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: #555;
+      font-weight: 500;
+    }
+    
+    input, select, textarea {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+    
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    button {
+      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-right: 0.5rem;
+    }
+    
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+    }
+    
+    button.secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+    
+    button.secondary:hover {
+      background: #e0e0e0;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    button.danger {
+      background: linear-gradient(135deg, #f56565 0, #c53030 100%);
+    }
+    
+    .logs-container {
+      background: #1e1e1e;
+      color: #0f0;
+      padding: 1rem;
+      border-radius: 8px;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      height: 400px;
+      overflow-y: auto;
+      font-size: 0.9rem;
+    }
+    
+    .log-entry {
+      border-bottom: 1px solid #333;
+      padding: 0.5rem 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .log-entry:hover {
+      background: #2a2a2a;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+    
+    .tab {
+      padding: 0.75rem 1.5rem;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .tab:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+    
+    .tab.active {
+      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+      color: white;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .chart-container {
+      height: 300px;
+      margin: 1rem 0;
+      position: relative;
+    }
+    
+    .alert {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 1rem 2rem;
+      border-radius: 8px;
+      color: white;
+      z-index: 1000;
+      display: none;
+      animation: slideIn 0.3s ease;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+    
+    .alert.success {
+      background: linear-gradient(135deg, #48bb78 0, #2f855a 100%);
+    }
+    
+    .alert.error {
+      background: linear-gradient(135deg, #f56565 0, #c53030 100%);
+    }
+    
+    .alert.info {
+      background: linear-gradient(135deg, #4299e1 0, #3182ce 100%);
+    }
+    
+    .result-box {
+      margin-top: 1.5rem;
+      padding: 1.5rem;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #e0e0e0;
+    }
+    
+    .url-display {
+      display: flex;
+      gap: 0.5rem;
+      margin: 1rem 0;
+    }
+    
+    .url-display input {
+      flex: 1;
+      background: white;
+    }
+    
+    .stats-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    
+    .stat-item {
+      background: #f8f9fa;
+      padding: 1rem;
+      border-radius: 8px;
+      text-align: center;
+    }
+    
+    .stat-item .label {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .stat-item .number {
+      font-size: 2rem;
+      font-weight: bold;
+      color: #667eea;
+    }
+    
+    #qrResult {
+      text-align: center;
+      margin-top: 1rem;
+    }
+    
+    #qrResult img {
+      max-width: 200px;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 0.5rem;
+      background: white;
+    }
+    
+    .system-status {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1rem;
+    }
+    
+    .status-card {
+      background: #f8f9fa;
+      padding: 1rem;
+      border-radius: 8px;
+      border-left: 4px solid #667eea;
+    }
+    
+    .status-card .title {
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    
+    .status-card .status {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+    
+    .status-card .status.connected {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+    
+    .status-card .status.disconnected {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+    
+    @media (max-width: 768px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+      
+      .container {
+        padding: 1rem;
+      }
+      
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="alert" id="alert"></div>
   
   <div class="navbar">
-    <h1>🔗 Redirector Pro Enterprise</h1>
+    <h1>
+      <span>🔗</span>
+      Redirector Pro Enterprise
+    </h1>
     <div>
-      <span id="uptime"></span>
+      <span id="uptime" style="margin-right: 1rem;"></span>
       <button onclick="logout()">Logout</button>
     </div>
   </div>
   
   <div class="container">
     <div class="tabs">
-      <span class="tab active" onclick="showTab('dashboard')">📊 Dashboard</span>
-      <span class="tab" onclick="showTab('generate')">🔗 Generate Link</span>
-      <span class="tab" onclick="showTab('analytics')">📈 Analytics</span>
-      <span class="tab" onclick="showTab('logs')">📋 Live Logs</span>
-      <span class="tab" onclick="showTab('settings')">⚙️ Settings</span>
-      ${redisClient ? '<span class="tab" onclick="window.location.href=\'' + validatedConfig.BULL_BOARD_PATH + '\'">⏱️ Queues</span>' : ''}
+      <div class="tab active" onclick="showTab('dashboard')">📊 Dashboard</div>
+      <div class="tab" onclick="showTab('generate')">🔗 Generate Link</div>
+      <div class="tab" onclick="showTab('analytics')">📈 Analytics</div>
+      <div class="tab" onclick="showTab('logs')">📋 Live Logs</div>
+      <div class="tab" onclick="showTab('settings')">⚙️ Settings</div>
+      ${redisClient ? '<div class="tab" onclick="window.location.href=\'' + validatedConfig.BULL_BOARD_PATH + '\'">⏱️ Queues</div>' : ''}
     </div>
 
+    <!-- Dashboard Tab -->
     <div id="dashboard" class="tab-content active">
-      <div class="stats">
+      <div class="stats-grid">
         <div class="stat-card">
           <h3>Total Requests</h3>
           <div class="value" id="totalRequests">0</div>
+          <div class="sub-value">all time</div>
         </div>
         <div class="stat-card">
           <h3>Active Links</h3>
           <div class="value" id="activeLinks">0</div>
+          <div class="sub-value">current</div>
         </div>
         <div class="stat-card">
           <h3>Bot Blocks</h3>
           <div class="value" id="botBlocks">0</div>
+          <div class="sub-value">threats blocked</div>
         </div>
         <div class="stat-card">
           <h3>Success Rate</h3>
           <div class="value" id="successRate">0%</div>
+          <div class="sub-value">last 24h</div>
         </div>
       </div>
 
       <div class="grid-2">
         <div class="section">
-          <h3>Requests Over Time</h3>
+          <h2>📈 Requests Over Time</h2>
           <div class="chart-container">
             <canvas id="requestsChart"></canvas>
           </div>
         </div>
         <div class="section">
-          <h3>Device Distribution</h3>
+          <h2>📱 Device Distribution</h2>
           <div class="chart-container">
             <canvas id="deviceChart"></canvas>
           </div>
@@ -1825,101 +2103,182 @@ app.get('/admin', (req, res, next) => {
       </div>
 
       <div class="section">
-        <h3>Top Countries</h3>
-        <div id="countryStats"></div>
+        <h2>🌍 Top Countries</h2>
+        <div class="stats-list" id="countryStats">
+          <div class="stat-item">
+            <div class="label">Loading...</div>
+          </div>
+        </div>
       </div>
     </div>
 
+    <!-- Generate Link Tab -->
     <div id="generate" class="tab-content">
       <div class="section">
-        <h3>Generate New Link</h3>
+        <h2>🔗 Generate New Link</h2>
         <input type="hidden" name="_csrf" value="${csrfToken}">
-        <input type="url" id="targetUrl" placeholder="Target URL" value="${TARGET_URL}">
-        <input type="password" id="linkPassword" placeholder="Password (optional)">
-        <div class="grid-2">
-          <input type="number" id="maxClicks" placeholder="Max clicks (optional)" min="1">
-          <select id="expiresIn">
-            <option value="5m">5 minutes</option>
-            <option value="30m" selected>30 minutes</option>
-            <option value="1h">1 hour</option>
-            <option value="6h">6 hours</option>
-            <option value="24h">24 hours</option>
-            <option value="7d">7 days</option>
-          </select>
+        
+        <div class="form-group">
+          <label>Target URL</label>
+          <input type="url" id="targetUrl" placeholder="https://example.com" value="${TARGET_URL}">
         </div>
+        
+        <div class="form-group">
+          <label>Password Protection (optional)</label>
+          <input type="password" id="linkPassword" placeholder="Enter password to protect link">
+        </div>
+        
+        <div class="grid-2">
+          <div class="form-group">
+            <label>Max Clicks (optional)</label>
+            <input type="number" id="maxClicks" placeholder="Unlimited" min="1">
+          </div>
+          <div class="form-group">
+            <label>Expires In</label>
+            <select id="expiresIn">
+              <option value="5m">5 minutes</option>
+              <option value="30m" selected>30 minutes</option>
+              <option value="1h">1 hour</option>
+              <option value="6h">6 hours</option>
+              <option value="24h">24 hours</option>
+              <option value="7d">7 days</option>
+            </select>
+          </div>
+        </div>
+        
         <button onclick="generateLink()">Generate Link</button>
-        <div id="result" style="margin-top:1rem;display:none">
-          <h4>Generated Link:</h4>
-          <div style="display:flex;gap:0.5rem">
-            <input type="text" id="generatedUrl" readonly style="flex:1">
-            <button onclick="copyToClipboard()">Copy</button>
-            <button onclick="showQR()">QR Code</button>
+        
+        <div id="result" class="result-box" style="display:none">
+          <h3>✅ Link Generated Successfully!</h3>
+          <div class="url-display">
+            <input type="text" id="generatedUrl" readonly>
+            <button class="secondary" onclick="copyToClipboard()">Copy</button>
+            <button class="secondary" onclick="showQR()">QR Code</button>
           </div>
-          <div id="qrResult" style="display:none;text-align:center;margin-top:1rem">
-            <img id="qrImage" src="" alt="QR Code">
-          </div>
+          <div id="qrResult"></div>
         </div>
       </div>
     </div>
 
+    <!-- Analytics Tab -->
     <div id="analytics" class="tab-content">
       <div class="section">
-        <h3>Link Analytics</h3>
-        <input type="text" id="analyticsLinkId" placeholder="Enter Link ID">
-        <button onclick="getLinkStats()">Get Stats</button>
-        <div id="linkStats" style="margin-top:1rem"></div>
+        <h2>📊 Link Analytics</h2>
+        <div class="form-group">
+          <label>Enter Link ID</label>
+          <input type="text" id="analyticsLinkId" placeholder="e.g., a1b2c3d4e5f6g7h8">
+        </div>
+        <button onclick="getLinkStats()">Get Statistics</button>
+        
+        <div id="linkStats" class="result-box" style="display:none">
+          <h3>Link Statistics</h3>
+          <div class="stats-list" id="statsContent"></div>
+        </div>
       </div>
     </div>
 
+    <!-- Live Logs Tab -->
     <div id="logs" class="tab-content">
       <div class="section">
-        <h3>Live Logs</h3>
-        <div class="logs" id="logs"></div>
+        <h2>📋 Live Activity Logs</h2>
+        <div class="logs-container" id="logs"></div>
       </div>
     </div>
 
+    <!-- Settings Tab -->
     <div id="settings" class="tab-content">
-      <div class="section">
-        <h3>Cache Management</h3>
-        <button onclick="clearCache()">Clear All Caches</button>
-        <button onclick="exportLogs()">Export Logs</button>
+      <div class="grid-2">
+        <div class="section">
+          <h2>🗑️ Cache Management</h2>
+          <button onclick="clearCache()" class="danger">Clear All Caches</button>
+          <button onclick="exportLogs()" style="margin-top: 1rem;">Export Logs</button>
+        </div>
+        
+        <div class="section">
+          <h2>📊 System Status</h2>
+          <div class="system-status" id="systemStatus">
+            <div class="status-card">
+              <div class="title">Socket Connection</div>
+              <div class="status connected" id="socketStatus">Connected</div>
+            </div>
+            <div class="status-card">
+              <div class="title">Database</div>
+              <div class="status ${dbPool ? 'connected' : 'disconnected'}" id="dbStatus">
+                ${dbPool ? 'Connected' : 'Disconnected'}
+              </div>
+            </div>
+            <div class="status-card">
+              <div class="title">Redis</div>
+              <div class="status ${redisClient ? 'connected' : 'disconnected'}" id="redisStatus">
+                ${redisClient ? 'Connected' : 'Disconnected'}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       
       <div class="section">
-        <h3>System Status</h3>
-        <div id="systemStatus"></div>
+        <h2>ℹ️ About</h2>
+        <p><strong>Version:</strong> 3.0.0 Enterprise</p>
+        <p><strong>Node.js:</strong> ${process.version}</p>
+        <p><strong>Platform:</strong> ${process.platform}</p>
+        <p><strong>Memory Usage:</strong> ${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB</p>
       </div>
     </div>
   </div>
 
   <script nonce="${nonce}">
-    const socket = io({auth: {token: '${METRICS_API_KEY}'}});
+    const socket = io({
+      auth: { token: '${METRICS_API_KEY}' },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000
+    });
+    
     let requestsChart, deviceChart;
     
+    socket.on('connect', () => {
+      console.log('✅ Socket connected');
+      showAlert('Real-time monitoring connected', 'success');
+      document.getElementById('socketStatus').textContent = 'Connected';
+      document.getElementById('socketStatus').className = 'status connected';
+    });
+    
+    socket.on('disconnect', () => {
+      console.log('❌ Socket disconnected');
+      showAlert('Real-time monitoring disconnected', 'error');
+      document.getElementById('socketStatus').textContent = 'Disconnected';
+      document.getElementById('socketStatus').className = 'status disconnected';
+    });
+    
     socket.on('stats', (data) => {
-      document.getElementById('totalRequests').textContent = data.totalRequests.toLocaleString();
-      document.getElementById('activeLinks').textContent = data.realtime.activeLinks.toLocaleString();
-      document.getElementById('botBlocks').textContent = data.botBlocks.toLocaleString();
-      
-      const successRate = data.totalRequests ? ((data.successfulRedirects / data.totalRequests) * 100).toFixed(1) : 0;
-      document.getElementById('successRate').textContent = successRate + '%';
-      
+      updateStats(data);
       updateCharts(data);
       updateCountryStats(data.byCountry);
     });
     
     socket.on('log', (log) => {
-      const logs = document.getElementById('logs');
-      const entry = document.createElement('div');
-      entry.className = 'log-entry';
-      entry.textContent = '[' + new Date(log.t).toLocaleTimeString() + '] ' + log.ip + ' ' + log.path + ' [' + log.device + ']';
-      logs.insertBefore(entry, logs.firstChild);
-      if (logs.children.length > 200) logs.removeChild(logs.lastChild);
+      addLogEntry(log);
+    });
+    
+    socket.on('link-generated', (link) => {
+      showAlert('New link generated: ' + link.id, 'info');
     });
     
     socket.on('notification', (notification) => {
       showAlert(notification.message, notification.type);
     });
+    
+    function updateStats(data) {
+      document.getElementById('totalRequests').textContent = data.totalRequests?.toLocaleString() || '0';
+      document.getElementById('activeLinks').textContent = data.realtime?.activeLinks?.toLocaleString() || '0';
+      document.getElementById('botBlocks').textContent = data.botBlocks?.toLocaleString() || '0';
+      
+      const successRate = data.totalRequests ? 
+        ((data.successfulRedirects / data.totalRequests) * 100).toFixed(1) : 0;
+      document.getElementById('successRate').textContent = successRate + '%';
+    }
     
     function updateCharts(data) {
       const ctx1 = document.getElementById('requestsChart').getContext('2d');
@@ -1928,24 +2287,55 @@ app.get('/admin', (req, res, next) => {
       if (requestsChart) requestsChart.destroy();
       if (deviceChart) deviceChart.destroy();
       
-      const lastMinute = data.realtime.lastMinute || [];
-      const timestamps = lastMinute.map(d => new Date(d.time).toLocaleTimeString());
+      const lastMinute = data.realtime?.lastMinute || [];
+      const timestamps = lastMinute.map(d => {
+        const date = new Date(d.time);
+        return date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0') + ':' + date.getSeconds().toString().padStart(2, '0');
+      });
       const requests = lastMinute.map(d => d.requests || 0);
+      const blocks = lastMinute.map(d => d.blocks || 0);
+      const successes = lastMinute.map(d => d.successes || 0);
       
       requestsChart = new Chart(ctx1, {
         type: 'line',
         data: {
           labels: timestamps,
-          datasets: [{
-            label: 'Requests',
-            data: requests,
-            borderColor: '#667eea',
-            tension: 0.4
-          }]
+          datasets: [
+            {
+              label: 'Requests',
+              data: requests,
+              borderColor: '#667eea',
+              backgroundColor: 'rgba(102,126,234,0.1)',
+              tension: 0.4,
+              fill: true
+            },
+            {
+              label: 'Successful',
+              data: successes,
+              borderColor: '#48bb78',
+              backgroundColor: 'rgba(72,187,120,0.1)',
+              tension: 0.4,
+              fill: true
+            },
+            {
+              label: 'Blocks',
+              data: blocks,
+              borderColor: '#f56565',
+              backgroundColor: 'rgba(245,101,101,0.1)',
+              tension: 0.4,
+              fill: true
+            }
+          ]
         },
         options: {
           responsive: true,
-          maintainAspectRatio: false
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { position: 'top' } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
+            x: { grid: { display: false } }
+          }
         }
       });
       
@@ -1955,34 +2345,59 @@ app.get('/admin', (req, res, next) => {
           labels: ['Mobile', 'Desktop', 'Tablet', 'Bot'],
           datasets: [{
             data: [
-              data.byDevice.mobile || 0,
-              data.byDevice.desktop || 0,
-              data.byDevice.tablet || 0,
-              data.byDevice.bot || 0
+              data.byDevice?.mobile || 0,
+              data.byDevice?.desktop || 0,
+              data.byDevice?.tablet || 0,
+              data.byDevice?.bot || 0
             ],
-            backgroundColor: ['#48bb78', '#4299e1', '#ed8936', '#f56565']
+            backgroundColor: ['#48bb78', '#4299e1', '#ed8936', '#f56565'],
+            borderWidth: 0
           }]
         },
         options: {
           responsive: true,
-          maintainAspectRatio: false
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+          cutout: '60%'
         }
       });
     }
     
     function updateCountryStats(countries) {
       const container = document.getElementById('countryStats');
+      if (!countries || Object.keys(countries).length === 0) {
+        container.innerHTML = '<div class="stat-item"><div class="label">No data yet</div></div>';
+        return;
+      }
+      
       const sorted = Object.entries(countries)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 10);
+        .slice(0, 8);
       
-      let html = '';
-      for (let i = 0; i < sorted.length; i++) {
-        const country = sorted[i][0];
-        const count = sorted[i][1];
-        html += '<div>' + country + ': ' + count.toLocaleString() + '</div>';
-      }
-      container.innerHTML = html;
+      container.innerHTML = sorted.map(([country, count]) => \`
+        <div class="stat-item">
+          <div class="label">\${country}</div>
+          <div class="number">\${count.toLocaleString()}</div>
+        </div>
+      \`).join('');
+    }
+    
+    function addLogEntry(log) {
+      const logs = document.getElementById('logs');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      
+      const time = new Date(log.t).toLocaleTimeString();
+      const device = log.device || 'unknown';
+      let emoji = '🌐';
+      if (device === 'mobile') emoji = '📱';
+      else if (device === 'tablet') emoji = '📟';
+      else if (device === 'bot') emoji = '🤖';
+      
+      entry.innerHTML = \`[\${time}] \${emoji} \${log.ip} \${log.method} \${log.path} [\${device}] \${log.duration}ms\`;
+      
+      logs.insertBefore(entry, logs.firstChild);
+      if (logs.children.length > 200) logs.removeChild(logs.lastChild);
     }
     
     async function generateLink() {
@@ -1992,74 +2407,134 @@ app.get('/admin', (req, res, next) => {
       const maxClicks = document.getElementById('maxClicks').value;
       const expiresIn = document.getElementById('expiresIn').value;
       
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': csrf
-        },
-        body: JSON.stringify({ 
-          url, 
-          password: password || undefined,
-          maxClicks: maxClicks ? parseInt(maxClicks) : undefined,
-          expiresIn,
-          _csrf: csrf
-        }),
-        credentials: 'include'
-      });
+      if (!url) {
+        showAlert('Please enter a URL', 'error');
+        return;
+      }
       
-      if (res.ok) {
-        const data = await res.json();
-        document.getElementById('generatedUrl').value = data.url;
-        document.getElementById('result').style.display = 'block';
-        document.getElementById('qrResult').style.display = 'none';
-        showAlert('Link generated successfully!', 'success');
-      } else {
-        const error = await res.json();
-        showAlert(error.error || 'Failed to generate link', 'error');
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrf
+          },
+          body: JSON.stringify({ 
+            url, 
+            password: password || undefined,
+            maxClicks: maxClicks ? parseInt(maxClicks) : undefined,
+            expiresIn
+          }),
+          credentials: 'include'
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('generatedUrl').value = data.url;
+          document.getElementById('result').style.display = 'block';
+          document.getElementById('qrResult').innerHTML = '';
+          showAlert('Link generated successfully!', 'success');
+        } else {
+          const error = await res.json();
+          showAlert(error.error || 'Failed to generate link', 'error');
+        }
+      } catch (err) {
+        showAlert('Network error: ' + err.message, 'error');
       }
     }
     
     async function showQR() {
       const url = document.getElementById('generatedUrl').value;
-      const res = await fetch('/qr?url=' + encodeURIComponent(url));
-      if (res.ok) {
-        const data = await res.json();
-        document.getElementById('qrImage').src = data.qr;
-        document.getElementById('qrResult').style.display = 'block';
+      if (!url) return;
+      
+      try {
+        const res = await fetch('/qr?url=' + encodeURIComponent(url));
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('qrResult').innerHTML = \`
+            <h4>QR Code:</h4>
+            <img src="\${data.qr}" alt="QR Code">
+            <p><small>Scan to open link</small></p>
+          \`;
+        }
+      } catch (err) {
+        showAlert('Failed to generate QR code', 'error');
       }
     }
     
     async function getLinkStats() {
       const linkId = document.getElementById('analyticsLinkId').value;
-      const res = await fetch('/api/stats/' + linkId);
-      if (res.ok) {
-        const stats = await res.json();
-        document.getElementById('linkStats').innerHTML = 
-          '<h4>Link Statistics</h4>' +
-          '<p>Total Clicks: ' + (stats.clicks || 0) + '</p>' +
-          '<p>Unique Visitors: ' + (stats.uniqueVisitors || 0) + '</p>' +
-          '<p>Created: ' + (stats.created ? new Date(stats.created).toLocaleString() : 'N/A') + '</p>' +
-          '<p>Expires: ' + (stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A') + '</p>';
+      if (!linkId) {
+        showAlert('Please enter a link ID', 'error');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/stats/' + linkId);
+        if (res.ok) {
+          const stats = await res.json();
+          document.getElementById('linkStats').style.display = 'block';
+          
+          let html = '';
+          if (stats.exists) {
+            html = \`
+              <div class="stat-item">
+                <div class="label">Total Clicks</div>
+                <div class="number">\${stats.clicks || 0}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Unique Visitors</div>
+                <div class="number">\${stats.uniqueVisitors || 0}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Created</div>
+                <div class="number" style="font-size:1rem">\${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Expires</div>
+                <div class="number" style="font-size:1rem">\${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</div>
+              </div>
+            \`;
+          } else {
+            html = '<div class="stat-item"><div class="label">Link not found or expired</div></div>';
+          }
+          
+          document.getElementById('statsContent').innerHTML = html;
+        }
+      } catch (err) {
+        showAlert('Failed to get statistics', 'error');
       }
     }
     
     async function clearCache() {
+      if (!confirm('Are you sure you want to clear all caches? This may temporarily affect performance.')) {
+        return;
+      }
+      
       const csrf = document.querySelector('input[name="_csrf"]').value;
-      const res = await fetch('/admin/clear-cache', {
-        method: 'POST',
-        headers: { 
-          'X-CSRF-Token': csrf
-        },
-        body: JSON.stringify({ _csrf: csrf }),
-        credentials: 'include'
-      });
-      if (res.ok) {
-        showAlert('Cache cleared successfully', 'success');
+      
+      try {
+        const res = await fetch('/admin/clear-cache', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrf
+          },
+          body: JSON.stringify({ _csrf: csrf }),
+          credentials: 'include'
+        });
+        
+        if (res.ok) {
+          showAlert('Cache cleared successfully', 'success');
+        } else {
+          showAlert('Failed to clear cache', 'error');
+        }
+      } catch (err) {
+        showAlert('Network error', 'error');
       }
     }
     
-    async function exportLogs() {
+    function exportLogs() {
       window.location.href = '/admin/export-logs';
     }
     
@@ -2075,6 +2550,7 @@ app.get('/admin', (req, res, next) => {
       alert.className = 'alert ' + type;
       alert.textContent = message;
       alert.style.display = 'block';
+      
       setTimeout(() => {
         alert.style.display = 'none';
       }, 3000);
@@ -2084,15 +2560,15 @@ app.get('/admin', (req, res, next) => {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       
-      const tabElement = document.querySelector('.tab[onclick="showTab(\'' + tab + '\')"]');
-      if (tabElement) {
-        tabElement.classList.add('active');
-      }
+      document.querySelector(\`.tab[onclick="showTab('\${tab}')\`).classList.add('active');
       document.getElementById(tab).classList.add('active');
     }
     
     function logout() {
-      fetch('/admin/logout', {method: 'POST'}).then(() => {
+      fetch('/admin/logout', {
+        method: 'POST',
+        credentials: 'include'
+      }).then(() => {
         window.location.href = '/admin/login';
       });
     }
@@ -2101,8 +2577,11 @@ app.get('/admin', (req, res, next) => {
       const uptime = Math.floor(process.uptime());
       const hours = Math.floor(uptime / 3600);
       const minutes = Math.floor((uptime % 3600) / 60);
-      document.getElementById('uptime').textContent = 'Uptime: ' + hours + 'h ' + minutes + 'm';
+      const seconds = uptime % 60;
+      document.getElementById('uptime').textContent = \`Uptime: \${hours}h \${minutes}m \${seconds}s\`;
     }, 1000);
+    
+    socket.emit('command', { action: 'getStats' });
   </script>
 </body>
 </html>`);
@@ -2147,13 +2626,13 @@ app.get('/admin/export-logs', async (req, res, next) => {
   }
 });
 
-// ─── 404 Handler ─────────────────────────────────────────────────────────────
+// 404 Handler
 app.use((req, res) => {
   logRequest('404', req, res);
   res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
 });
 
-// ─── Global Error Handler ────────────────────────────────────────────────────
+// Global Error Handler
 app.use((err, req, res, next) => {
   logger.error('Error:', {
     message: err.message,
@@ -2185,7 +2664,7 @@ app.use((err, req, res, next) => {
   }
 });
 
-// ─── Graceful Shutdown ──────────────────────────────────────────────────────
+// Graceful Shutdown
 async function gracefulShutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully...`);
   
@@ -2195,18 +2674,11 @@ async function gracefulShutdown(signal) {
   }, 30000);
   
   try {
-    // Close queues
     if (redirectQueue) await redirectQueue.close();
     if (emailQueue) await emailQueue.close();
     if (analyticsQueue) await analyticsQueue.close();
-    
-    // Close database pool
     if (dbPool) await dbPool.end();
-    
-    // Close Redis
     if (redisClient) await redisClient.quit();
-    
-    // Close server
     await new Promise((resolve) => server.close(resolve));
     
     clearTimeout(shutdownTimeout);
@@ -2221,7 +2693,6 @@ async function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// ─── Uncaught Exceptions/Rejections ──────────────────────────────────────────
 process.on('uncaughtException', (err) => {
   logger.error('Uncaught Exception:', err);
   gracefulShutdown('UNCAUGHT_EXCEPTION');
@@ -2231,7 +2702,7 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// ─── Start Server ────────────────────────────────────────────────────────────
+// Start Server
 server.listen(PORT, '0.0.0.0', () => {
   console.log('\n' + '='.repeat(70));
   console.log(`  🚀 Redirector Pro v3.0 - Enterprise Edition`);
@@ -2254,7 +2725,6 @@ server.listen(PORT, '0.0.0.0', () => {
   }
   console.log('='.repeat(70) + '\n');
   
-  // Log startup
   logger.info('Server started', {
     port: PORT,
     nodeEnv: NODE_ENV,
