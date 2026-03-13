@@ -294,7 +294,7 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
       }
     });
 
-    // Create tables with proper schema and error handling - FIXED ORDER with separate steps
+    // Create tables with proper schema and error handling
     const createTables = async () => {
       try {
         logger.info('📦 Creating database tables...');
@@ -367,60 +367,29 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
 
         logger.info('✅ Tables created successfully');
 
-        // Step 2: Create indexes separately with error handling for each
-        try {
-          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);`);
-          logger.info('✅ Created index idx_links_expires');
-        } catch (err) {
-          logger.warn('Could not create idx_links_expires:', err.message);
-        }
+        // Step 2: Create indexes separately
+        const indexes = [
+          { name: 'idx_links_expires', query: 'CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);' },
+          { name: 'idx_links_status', query: 'CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);' },
+          { name: 'idx_clicks_link_id', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);' },
+          { name: 'idx_clicks_created', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);' },
+          { name: 'idx_analytics_type', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);' },
+          { name: 'idx_analytics_created', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);' },
+          { name: 'idx_blocked_ips_expires', query: 'CREATE INDEX IF NOT EXISTS idx_blocked_ips_expires ON blocked_ips(expires_at);' }
+        ];
 
-        try {
-          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);`);
-          logger.info('✅ Created index idx_links_status');
-        } catch (err) {
-          logger.warn('Could not create idx_links_status:', err.message);
-        }
-
-        try {
-          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);`);
-          logger.info('✅ Created index idx_clicks_link_id');
-        } catch (err) {
-          logger.warn('Could not create idx_clicks_link_id:', err.message);
-        }
-
-        try {
-          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);`);
-          logger.info('✅ Created index idx_clicks_created');
-        } catch (err) {
-          logger.warn('Could not create idx_clicks_created:', err.message);
-        }
-
-        try {
-          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);`);
-          logger.info('✅ Created index idx_analytics_type');
-        } catch (err) {
-          logger.warn('Could not create idx_analytics_type:', err.message);
-        }
-
-        try {
-          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);`);
-          logger.info('✅ Created index idx_analytics_created');
-        } catch (err) {
-          logger.warn('Could not create idx_analytics_created:', err.message);
-        }
-
-        try {
-          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_blocked_ips_expires ON blocked_ips(expires_at);`);
-          logger.info('✅ Created index idx_blocked_ips_expires');
-        } catch (err) {
-          logger.warn('Could not create idx_blocked_ips_expires:', err.message);
+        for (const index of indexes) {
+          try {
+            await dbPool.query(index.query);
+            logger.info(`✅ Created index ${index.name}`);
+          } catch (err) {
+            logger.warn(`Could not create ${index.name}: ${err.message}`);
+          }
         }
 
         logger.info('✅ Database initialization completed');
       } catch (err) {
         logger.error('Database initialization error:', err);
-        // Don't exit, continue with limited functionality
       }
     };
 
@@ -942,7 +911,6 @@ app.use(responseTime((req, res, time) => {
   }
 }));
 
-// Update helmet CSP to allow Google Fonts and other resources
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -2018,29 +1986,15 @@ app.get('/admin/login', (req, res) => {
     const csrfToken = crypto.randomBytes(32).toString('hex');
     req.session.csrfToken = csrfToken;
     
-    // Generate nonce for CSP
-    const nonce = crypto.randomBytes(16).toString('hex');
-    
     try {
       // Read the login.html file
       const loginHtmlPath = path.join(__dirname, 'public', 'login.html');
       let html = await fs.readFile(loginHtmlPath, 'utf8');
       
-      // Inject the CSRF token and nonce into the HTML
-      html = html
-        .replace(
-          '<input type="hidden" id="csrfToken" value="">',
-          `<input type="hidden" id="csrfToken" value="${csrfToken}">`
-        )
-        .replace(
-          '{{NONCE}}',
-          nonce
-        );
-      
-      // Set CSP with nonce for this response
-      res.setHeader(
-        'Content-Security-Policy',
-        `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss:;`
+      // Inject the CSRF token
+      html = html.replace(
+        '<input type="hidden" id="csrfToken" value="">',
+        `<input type="hidden" id="csrfToken" value="${csrfToken}">`
       );
       
       res.send(html);
@@ -2070,7 +2024,7 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
         }
       } catch (dbErr) {
         // If table doesn't exist, log but continue
-        if (dbErr.code === '42P01') { // PostgreSQL error code for undefined table
+        if (dbErr.code === '42P01') {
           logger.warn('blocked_ips table not found, skipping IP block check');
         } else {
           logger.error('Database error checking blocked IP:', dbErr);
@@ -2094,7 +2048,7 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
     if (attemptData.count > 10) {
       logger.error(`Excessive login attempts from ${ip}: ${attemptData.count}`);
       
-      // Block IP in database (with error handling)
+      // Block IP in database
       if (dbPool) {
         try {
           await dbPool.query(
@@ -2161,23 +2115,45 @@ app.get('/admin', async (req, res, next) => {
   }
   
   try {
-    // Serve dashboard HTML with injected variables
-    let html = await fs.readFile(path.join(__dirname, 'public', 'index.html'), 'utf8');
+    // Read the dashboard HTML file
+    const dashboardPath = path.join(__dirname, 'public', 'index.html');
+    let html = await fs.readFile(dashboardPath, 'utf8');
     
     // Replace template variables
-    html = html
-      .replace(/{{METRICS_API_KEY}}/g, METRICS_API_KEY)
-      .replace(/{{TARGET_URL}}/g, TARGET_URL)
-      .replace(/{{csrfToken}}/g, req.session.csrfToken)
-      .replace(/{{dbPoolStatus}}/g, dbPool ? 'connected' : 'disconnected')
-      .replace(/{{redisStatus}}/g, redisClient?.status === 'ready' ? 'connected' : 'disconnected')
-      .replace(/{{bullBoardPath}}/g, validatedConfig.BULL_BOARD_PATH)
-      .replace(/{{redirectQueueStatus}}/g, redirectQueue ? 'connected' : 'disconnected');
+    const replacements = {
+      '{{METRICS_API_KEY}}': METRICS_API_KEY,
+      '{{TARGET_URL}}': TARGET_URL,
+      '{{csrfToken}}': req.session.csrfToken,
+      '{{dbPoolStatus}}': dbPool ? 'connected' : 'disconnected',
+      '{{redisStatus}}': redisClient?.status === 'ready' ? 'connected' : 'disconnected',
+      '{{redirectQueueStatus}}': redirectQueue ? 'connected' : 'disconnected',
+      '{{bullBoardPath}}': validatedConfig.BULL_BOARD_PATH
+    };
+    
+    for (const [key, value] of Object.entries(replacements)) {
+      html = html.replace(new RegExp(key, 'g'), value);
+    }
+    
+    // Generate nonce for CSP
+    const nonce = crypto.randomBytes(16).toString('hex');
+    res.locals.nonce = nonce;
+    
+    // Set CSP header
+    res.setHeader(
+      'Content-Security-Policy',
+      `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com https://fonts.gstatic.com; font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss:;`
+    );
+    
+    // Inject nonce into script tags that need it
+    html = html.replace(
+      '<script>',
+      `<script nonce="${nonce}">`
+    );
     
     res.send(html);
   } catch (err) {
-    logger.error('Failed to read index.html:', err);
-    res.status(500).send('Dashboard page not found');
+    logger.error('Failed to read dashboard:', err);
+    res.status(500).send('Dashboard not found');
   }
 });
 
