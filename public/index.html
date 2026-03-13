@@ -1,12 +1,130 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Redirector Pro Admin Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <title>Redirector Pro | Enterprise Command Center</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="color-scheme" content="light dark">
+  
+  <!-- Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  
+  <!-- Socket.IO -->
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  
   <style>
+    /* CSS Variables for Theming */
+    :root {
+      /* Colors */
+      --primary-50: #eef2ff;
+      --primary-100: #e0e7ff;
+      --primary-200: #c7d2fe;
+      --primary-300: #a5b4fc;
+      --primary-400: #818cf8;
+      --primary-500: #6366f1;
+      --primary-600: #4f46e5;
+      --primary-700: #4338ca;
+      --primary-800: #3730a3;
+      --primary-900: #312e81;
+      
+      /* Neutral Colors */
+      --neutral-50: #fafafa;
+      --neutral-100: #f4f4f5;
+      --neutral-200: #e4e4e7;
+      --neutral-300: #d4d4d8;
+      --neutral-400: #a1a1aa;
+      --neutral-500: #71717a;
+      --neutral-600: #52525b;
+      --neutral-700: #3f3f46;
+      --neutral-800: #27272a;
+      --neutral-900: #18181b;
+      
+      /* Semantic Colors */
+      --success-50: #f0fdf4;
+      --success-500: #22c55e;
+      --success-600: #16a34a;
+      --success-700: #15803d;
+      
+      --warning-50: #fffbeb;
+      --warning-500: #f59e0b;
+      --warning-600: #d97706;
+      --warning-700: #b45309;
+      
+      --error-50: #fef2f2;
+      --error-500: #ef4444;
+      --error-600: #dc2626;
+      --error-700: #b91c1c;
+      
+      --info-50: #eff6ff;
+      --info-500: #3b82f6;
+      --info-600: #2563eb;
+      
+      /* Spacing */
+      --spacing-xs: 0.25rem;
+      --spacing-sm: 0.5rem;
+      --spacing-md: 1rem;
+      --spacing-lg: 1.5rem;
+      --spacing-xl: 2rem;
+      --spacing-2xl: 3rem;
+      
+      /* Typography */
+      --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-size-xs: 0.75rem;
+      --font-size-sm: 0.875rem;
+      --font-size-md: 1rem;
+      --font-size-lg: 1.125rem;
+      --font-size-xl: 1.25rem;
+      --font-size-2xl: 1.5rem;
+      --font-size-3xl: 1.875rem;
+      
+      /* Borders */
+      --radius-sm: 0.375rem;
+      --radius-md: 0.5rem;
+      --radius-lg: 0.75rem;
+      --radius-xl: 1rem;
+      --radius-full: 9999px;
+      
+      /* Shadows */
+      --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+      --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+      --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+      --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+      
+      /* Transitions */
+      --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+      
+      /* Layout */
+      --sidebar-width: 280px;
+      --header-height: 64px;
+      --container-max-width: 1440px;
+    }
+    
+    /* Dark Mode */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --neutral-50: #18181b;
+        --neutral-100: #27272a;
+        --neutral-200: #3f3f46;
+        --neutral-300: #52525b;
+        --neutral-400: #71717a;
+        --neutral-500: #a1a1aa;
+        --neutral-600: #d4d4d8;
+        --neutral-700: #e4e4e7;
+        --neutral-800: #f4f4f5;
+        --neutral-900: #fafafa;
+      }
+    }
+    
+    /* Reset & Base */
     * {
       margin: 0;
       padding: 0;
@@ -14,455 +132,579 @@
     }
     
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #f5f5f5;
+      font-family: var(--font-family);
+      font-size: var(--font-size-md);
+      line-height: 1.5;
+      color: var(--neutral-900);
+      background: var(--neutral-100);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
     
-    .navbar {
-      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
-      color: white;
-      padding: 1rem 2rem;
+    /* App Layout */
+    .app {
+      min-height: 100vh;
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      flex-direction: column;
+    }
+    
+    /* Header */
+    .header {
       position: sticky;
       top: 0;
-      z-index: 100;
-    }
-    
-    .navbar h1 {
-      font-size: 1.5rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .navbar button {
-      background: rgba(255,255,255,0.2);
-      border: 1px solid rgba(255,255,255,0.3);
+      z-index: 40;
+      height: var(--header-height);
+      background: linear-gradient(135deg, var(--primary-600), var(--primary-800));
       color: white;
-      padding: 0.5rem 1.5rem;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 1rem;
-      transition: all 0.2s;
+      box-shadow: var(--shadow-md);
+    }
+    
+    .header-content {
+      height: 100%;
+      padding: 0 var(--spacing-lg);
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .navbar button:hover {
-      background: rgba(255,255,255,0.3);
-      transform: translateY(-1px);
-    }
-    
-    .container {
-      padding: 2rem;
-      max-width: 1400px;
+      justify-content: space-between;
+      max-width: var(--container-max-width);
       margin: 0 auto;
     }
     
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 1.5rem;
-      margin-bottom: 2rem;
-    }
-    
-    .stat-card {
-      background: white;
-      padding: 1.5rem;
-      border-radius: 12px;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-      transition: transform 0.2s;
-      border-left: 4px solid #667eea;
-    }
-    
-    .stat-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 6px 12px rgba(0,0,0,0.15);
-    }
-    
-    .stat-card h3 {
-      color: #666;
-      font-size: 0.9rem;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 0.5rem;
+    .logo {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .stat-card .value {
-      font-size: 2.5rem;
-      font-weight: bold;
-      color: #333;
-      line-height: 1.2;
-    }
-    
-    .stat-card .sub-value {
-      font-size: 0.9rem;
-      color: #999;
-      margin-top: 0.25rem;
-    }
-    
-    .section {
-      background: white;
-      padding: 2rem;
-      border-radius: 12px;
-      margin-bottom: 2rem;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    
-    .section h2 {
-      margin-bottom: 1.5rem;
-      color: #333;
-      font-size: 1.3rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      border-bottom: 2px solid #f0f0f0;
-      padding-bottom: 0.5rem;
-    }
-    
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 2rem;
-    }
-    
-    .grid-3 {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 2rem;
-    }
-    
-    .form-group {
-      margin-bottom: 1rem;
-    }
-    
-    label {
-      display: block;
-      margin-bottom: 0.5rem;
-      color: #555;
-      font-weight: 500;
-    }
-    
-    input, select, textarea {
-      width: 100%;
-      padding: 0.75rem;
-      border: 2px solid #e0e0e0;
-      border-radius: 8px;
-      font-size: 1rem;
-      transition: border-color 0.2s;
-    }
-    
-    input:focus, select:focus, textarea:focus {
-      outline: none;
-      border-color: #667eea;
-    }
-    
-    button {
-      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
-      color: white;
-      border: none;
-      padding: 0.75rem 1.5rem;
-      border-radius: 8px;
-      font-size: 1rem;
+      gap: var(--spacing-sm);
       font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      margin-right: 0.5rem;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
+      font-size: var(--font-size-lg);
     }
     
-    button:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+    .logo i {
+      font-size: var(--font-size-xl);
     }
     
-    button.secondary {
-      background: #f0f0f0;
-      color: #333;
-    }
-    
-    button.secondary:hover {
-      background: #e0e0e0;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    
-    button.danger {
-      background: linear-gradient(135deg, #f56565 0, #c53030 100%);
-    }
-    
-    button.success {
-      background: linear-gradient(135deg, #48bb78 0, #2f855a 100%);
-    }
-    
-    .logs-container {
-      background: #1e1e1e;
-      color: #0f0;
-      padding: 1rem;
-      border-radius: 8px;
-      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-      height: 400px;
-      overflow-y: auto;
-      font-size: 0.9rem;
-    }
-    
-    .log-entry {
-      border-bottom: 1px solid #333;
-      padding: 0.5rem 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    
-    .log-entry:hover {
-      background: #2a2a2a;
-    }
-    
-    .tabs {
-      display: flex;
-      gap: 0.5rem;
-      margin-bottom: 2rem;
-      flex-wrap: wrap;
-    }
-    
-    .tab {
-      padding: 0.75rem 1.5rem;
-      background: white;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 500;
-      transition: all 0.2s;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    .header-actions {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: var(--spacing-md);
     }
     
-    .tab:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    .uptime {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-xs);
+      font-size: var(--font-size-sm);
+      background: rgba(255, 255, 255, 0.1);
+      padding: var(--spacing-xs) var(--spacing-sm);
+      border-radius: var(--radius-full);
+      backdrop-filter: blur(4px);
     }
     
-    .tab.active {
-      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+    /* Mobile Menu Button */
+    .menu-toggle {
+      display: none;
+      background: none;
+      border: none;
       color: white;
+      font-size: var(--font-size-xl);
+      cursor: pointer;
+      padding: var(--spacing-sm);
+      border-radius: var(--radius-md);
+      transition: background var(--transition-fast);
     }
     
+    .menu-toggle:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    
+    /* Main Container */
+    .main-container {
+      display: flex;
+      flex: 1;
+      max-width: var(--container-max-width);
+      margin: 0 auto;
+      width: 100%;
+      position: relative;
+    }
+    
+    /* Sidebar */
+    .sidebar {
+      width: var(--sidebar-width);
+      background: var(--neutral-50);
+      border-right: 1px solid var(--neutral-200);
+      height: calc(100vh - var(--header-height));
+      position: sticky;
+      top: var(--header-height);
+      overflow-y: auto;
+      transition: transform var(--transition-base);
+      z-index: 30;
+    }
+    
+    .sidebar-nav {
+      padding: var(--spacing-md);
+    }
+    
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-md);
+      padding: var(--spacing-md) var(--spacing-lg);
+      margin-bottom: var(--spacing-xs);
+      border-radius: var(--radius-lg);
+      color: var(--neutral-600);
+      font-weight: 500;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .nav-item i {
+      width: 20px;
+      font-size: var(--font-size-lg);
+    }
+    
+    .nav-item:hover {
+      background: var(--neutral-200);
+      color: var(--primary-600);
+    }
+    
+    .nav-item.active {
+      background: var(--primary-50);
+      color: var(--primary-700);
+    }
+    
+    .nav-item.active::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      background: var(--primary-600);
+      border-radius: 0 var(--radius-full) var(--radius-full) 0;
+    }
+    
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      padding: var(--spacing-lg);
+      overflow-y: auto;
+      min-width: 0; /* Prevents flex overflow */
+    }
+    
+    /* Tab Content */
     .tab-content {
       display: none;
+      animation: fadeIn var(--transition-base);
     }
     
     .tab-content.active {
       display: block;
     }
     
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: var(--spacing-lg);
+      margin-bottom: var(--spacing-xl);
+    }
+    
+    .stat-card {
+      background: var(--neutral-50);
+      border-radius: var(--radius-xl);
+      padding: var(--spacing-lg);
+      box-shadow: var(--shadow-sm);
+      border: 1px solid var(--neutral-200);
+      transition: all var(--transition-base);
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary-400), var(--primary-600));
+      opacity: 0;
+      transition: opacity var(--transition-base);
+    }
+    
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--primary-200);
+    }
+    
+    .stat-card:hover::after {
+      opacity: 1;
+    }
+    
+    .stat-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--spacing-md);
+    }
+    
+    .stat-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--neutral-500);
+    }
+    
+    .stat-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: var(--radius-lg);
+      background: var(--primary-50);
+      color: var(--primary-600);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: var(--font-size-xl);
+    }
+    
+    .stat-value {
+      font-size: var(--font-size-3xl);
+      font-weight: 700;
+      color: var(--neutral-900);
+      line-height: 1.2;
+      margin-bottom: var(--spacing-xs);
+    }
+    
+    .stat-trend {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-xs);
+      font-size: var(--font-size-sm);
+      color: var(--neutral-500);
+    }
+    
+    .trend-up { color: var(--success-600); }
+    .trend-down { color: var(--error-600); }
+    
+    /* Charts Grid */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: var(--spacing-lg);
+      margin-bottom: var(--spacing-xl);
+    }
+    
+    .chart-card {
+      background: var(--neutral-50);
+      border-radius: var(--radius-xl);
+      padding: var(--spacing-lg);
+      box-shadow: var(--shadow-sm);
+      border: 1px solid var(--neutral-200);
+    }
+    
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--spacing-lg);
+    }
+    
+    .chart-title {
+      font-size: var(--font-size-lg);
+      font-weight: 600;
+      color: var(--neutral-800);
+    }
+    
     .chart-container {
       height: 300px;
-      margin: 1rem 0;
       position: relative;
     }
     
-    .alert {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      padding: 1rem 2rem;
-      border-radius: 8px;
-      color: white;
-      z-index: 1000;
-      display: none;
-      animation: slideIn 0.3s ease;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    /* Section Cards */
+    .section-card {
+      background: var(--neutral-50);
+      border-radius: var(--radius-xl);
+      padding: var(--spacing-xl);
+      box-shadow: var(--shadow-sm);
+      border: 1px solid var(--neutral-200);
+      margin-bottom: var(--spacing-xl);
     }
     
-    @keyframes slideIn {
-      from {
-        transform: translateX(100%);
-        opacity: 0;
-      }
-      to {
-        transform: translateX(0);
-        opacity: 1;
-      }
-    }
-    
-    .alert.success {
-      background: linear-gradient(135deg, #48bb78 0, #2f855a 100%);
-    }
-    
-    .alert.error {
-      background: linear-gradient(135deg, #f56565 0, #c53030 100%);
-    }
-    
-    .alert.info {
-      background: linear-gradient(135deg, #4299e1 0, #3182ce 100%);
-    }
-    
-    .result-box {
-      margin-top: 1.5rem;
-      padding: 1.5rem;
-      background: #f8f9fa;
-      border-radius: 8px;
-      border: 1px solid #e0e0e0;
-    }
-    
-    .url-display {
+    .section-header {
       display: flex;
-      gap: 0.5rem;
-      margin: 1rem 0;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: var(--spacing-xl);
+      flex-wrap: wrap;
+      gap: var(--spacing-md);
     }
     
-    .url-display input {
-      flex: 1;
-      background: white;
+    .section-title {
+      font-size: var(--font-size-xl);
+      font-weight: 600;
+      color: var(--neutral-800);
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
     }
     
-    .stats-list {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 1rem;
-    }
-    
-    .stat-item {
-      background: #f8f9fa;
-      padding: 1rem;
-      border-radius: 8px;
-      text-align: center;
-    }
-    
-    .stat-item .label {
-      color: #666;
-      font-size: 0.9rem;
-      margin-bottom: 0.5rem;
-    }
-    
-    .stat-item .number {
-      font-size: 2rem;
-      font-weight: bold;
-      color: #667eea;
-    }
-    
-    #qrResult {
-      text-align: center;
-      margin-top: 1rem;
-    }
-    
-    #qrResult img {
-      max-width: 200px;
-      border: 1px solid #e0e0e0;
-      border-radius: 8px;
-      padding: 0.5rem;
-      background: white;
-    }
-    
-    .system-status {
+    /* Forms */
+    .form-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 1rem;
+      gap: var(--spacing-lg);
     }
     
-    .status-card {
-      background: #f8f9fa;
-      padding: 1rem;
-      border-radius: 8px;
-      border-left: 4px solid #667eea;
+    .form-group {
+      margin-bottom: var(--spacing-lg);
     }
     
-    .status-card .title {
+    .form-label {
+      display: block;
+      font-size: var(--font-size-sm);
       font-weight: 600;
-      margin-bottom: 0.5rem;
+      color: var(--neutral-700);
+      margin-bottom: var(--spacing-xs);
     }
     
-    .status-card .status {
-      display: inline-block;
-      padding: 0.25rem 0.75rem;
-      border-radius: 20px;
-      font-size: 0.9rem;
-      font-weight: 500;
+    .form-control {
+      width: 100%;
+      padding: var(--spacing-md) var(--spacing-lg);
+      font-size: var(--font-size-md);
+      font-family: var(--font-family);
+      color: var(--neutral-900);
+      background: var(--neutral-50);
+      border: 2px solid var(--neutral-200);
+      border-radius: var(--radius-lg);
+      transition: all var(--transition-fast);
     }
     
-    .status-card .status.connected {
-      background: #c6f6d5;
-      color: #22543d;
+    .form-control:hover {
+      border-color: var(--neutral-300);
     }
     
-    .status-card .status.disconnected {
-      background: #fed7d7;
-      color: #742a2a;
+    .form-control:focus {
+      outline: none;
+      border-color: var(--primary-500);
+      box-shadow: 0 0 0 3px var(--primary-100);
     }
     
-    .links-table {
+    .form-control::placeholder {
+      color: var(--neutral-400);
+    }
+    
+    textarea.form-control {
+      min-height: 100px;
+      resize: vertical;
+    }
+    
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-md) var(--spacing-xl);
+      font-size: var(--font-size-md);
+      font-weight: 600;
+      line-height: 1;
+      color: white;
+      background: linear-gradient(135deg, var(--primary-600), var(--primary-700));
+      border: none;
+      border-radius: var(--radius-lg);
+      cursor: pointer;
+      transition: all var(--transition-base);
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .btn::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.2);
+      transform: translate(-50%, -50%);
+      transition: width 0.6s, height 0.6s;
+    }
+    
+    .btn:hover::before {
+      width: 300px;
+      height: 300px;
+    }
+    
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg);
+    }
+    
+    .btn:active {
+      transform: translateY(0);
+    }
+    
+    .btn-secondary {
+      background: var(--neutral-200);
+      color: var(--neutral-700);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--neutral-300);
+    }
+    
+    .btn-success {
+      background: linear-gradient(135deg, var(--success-500), var(--success-600));
+    }
+    
+    .btn-danger {
+      background: linear-gradient(135deg, var(--error-500), var(--error-600));
+    }
+    
+    .btn-sm {
+      padding: var(--spacing-sm) var(--spacing-md);
+      font-size: var(--font-size-sm);
+    }
+    
+    .btn-group {
+      display: flex;
+      gap: var(--spacing-sm);
+      flex-wrap: wrap;
+    }
+    
+    /* Tables */
+    .table-container {
+      overflow-x: auto;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--neutral-200);
+      background: var(--neutral-50);
+    }
+    
+    .table {
       width: 100%;
       border-collapse: collapse;
+      min-width: 800px;
     }
     
-    .links-table th {
+    .table th {
       text-align: left;
-      padding: 1rem;
-      background: #f8f9fa;
-      border-bottom: 2px solid #e0e0e0;
+      padding: var(--spacing-md) var(--spacing-lg);
+      background: var(--neutral-100);
+      color: var(--neutral-600);
+      font-weight: 600;
+      font-size: var(--font-size-sm);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 2px solid var(--neutral-200);
     }
     
-    .links-table td {
-      padding: 1rem;
-      border-bottom: 1px solid #e0e0e0;
+    .table td {
+      padding: var(--spacing-md) var(--spacing-lg);
+      border-bottom: 1px solid var(--neutral-200);
+      color: var(--neutral-700);
     }
     
-    .links-table tr:hover {
-      background: #f8f9fa;
+    .table tr:hover td {
+      background: var(--neutral-100);
     }
     
+    .table tr:last-child td {
+      border-bottom: none;
+    }
+    
+    /* Badges */
     .badge {
-      padding: 0.25rem 0.5rem;
-      border-radius: 4px;
-      font-size: 0.8rem;
-      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      padding: var(--spacing-xs) var(--spacing-sm);
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      border-radius: var(--radius-full);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
     
-    .badge.active {
-      background: #c6f6d5;
-      color: #22543d;
+    .badge-success {
+      background: var(--success-50);
+      color: var(--success-700);
     }
     
-    .badge.expired {
-      background: #fed7d7;
-      color: #742a2a;
+    .badge-warning {
+      background: var(--warning-50);
+      color: var(--warning-700);
     }
     
-    .badge.completed {
-      background: #feebc8;
-      color: #744210;
+    .badge-error {
+      background: var(--error-50);
+      color: var(--error-700);
     }
     
-    .action-buttons {
-      display: flex;
-      gap: 0.5rem;
+    .badge-info {
+      background: var(--info-50);
+      color: var(--info-600);
     }
     
-    .action-buttons button {
-      padding: 0.25rem 0.5rem;
-      font-size: 0.9rem;
+    /* Status Indicators */
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: var(--spacing-xs);
     }
     
+    .status-dot.connected { background: var(--success-500); box-shadow: 0 0 0 2px var(--success-200); }
+    .status-dot.disconnected { background: var(--error-500); box-shadow: 0 0 0 2px var(--error-200); }
+    .status-dot.warning { background: var(--warning-500); box-shadow: 0 0 0 2px var(--warning-200); }
+    
+    /* Logs Container */
+    .logs-container {
+      background: var(--neutral-900);
+      color: #22c55e;
+      padding: var(--spacing-lg);
+      border-radius: var(--radius-lg);
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      font-size: var(--font-size-sm);
+      height: 400px;
+      overflow-y: auto;
+      border: 1px solid var(--neutral-700);
+    }
+    
+    .log-entry {
+      padding: var(--spacing-xs) 0;
+      border-bottom: 1px solid var(--neutral-700);
+      color: #4ade80;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .log-entry:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    
+    /* Modal */
     .modal {
       display: none;
       position: fixed;
       top: 0;
       left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,0.5);
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
       z-index: 1000;
       align-items: center;
       justify-content: center;
+      padding: var(--spacing-md);
     }
     
     .modal.active {
@@ -470,47 +712,148 @@
     }
     
     .modal-content {
-      background: white;
-      padding: 2rem;
-      border-radius: 12px;
-      max-width: 500px;
-      width: 90%;
+      background: var(--neutral-50);
+      border-radius: var(--radius-xl);
+      padding: var(--spacing-xl);
+      max-width: 600px;
+      width: 100%;
       max-height: 90vh;
       overflow-y: auto;
+      box-shadow: var(--shadow-xl);
+      animation: modalSlideIn var(--transition-base);
+    }
+    
+    @keyframes modalSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
     
     .modal-header {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 1rem;
+      justify-content: space-between;
+      margin-bottom: var(--spacing-lg);
+    }
+    
+    .modal-title {
+      font-size: var(--font-size-xl);
+      font-weight: 600;
+      color: var(--neutral-800);
     }
     
     .modal-close {
+      background: none;
+      border: none;
+      font-size: var(--font-size-xl);
+      color: var(--neutral-500);
       cursor: pointer;
-      font-size: 1.5rem;
-      color: #999;
+      padding: var(--spacing-sm);
+      border-radius: var(--radius-md);
+      transition: all var(--transition-fast);
     }
     
-    .setting-item {
-      display: flex;
-      justify-content: space-between;
+    .modal-close:hover {
+      background: var(--neutral-200);
+      color: var(--neutral-800);
+    }
+    
+    /* Alert */
+    .alert {
+      position: fixed;
+      top: calc(var(--header-height) + var(--spacing-md));
+      right: var(--spacing-lg);
+      z-index: 1000;
+      min-width: 320px;
+      max-width: 400px;
+      padding: var(--spacing-md) var(--spacing-lg);
+      background: white;
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-xl);
+      display: none;
       align-items: center;
-      padding: 1rem 0;
-      border-bottom: 1px solid #e0e0e0;
+      gap: var(--spacing-md);
+      border-left: 4px solid transparent;
+      animation: slideInRight var(--transition-base);
     }
     
-    .setting-item:last-child {
-      border-bottom: none;
+    @keyframes slideInRight {
+      from {
+        opacity: 0;
+        transform: translateX(100%);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
     }
     
-    .toggle-switch {
+    .alert-success {
+      border-left-color: var(--success-500);
+    }
+    
+    .alert-error {
+      border-left-color: var(--error-500);
+    }
+    
+    .alert-info {
+      border-left-color: var(--info-500);
+    }
+    
+    .alert-warning {
+      border-left-color: var(--warning-500);
+    }
+    
+    .alert-icon {
+      font-size: var(--font-size-xl);
+    }
+    
+    .alert-content {
+      flex: 1;
+    }
+    
+    .alert-title {
+      font-weight: 600;
+      margin-bottom: var(--spacing-xs);
+    }
+    
+    .alert-message {
+      font-size: var(--font-size-sm);
+      color: var(--neutral-600);
+    }
+    
+    /* Loading Skeleton */
+    .skeleton {
+      background: linear-gradient(
+        90deg,
+        var(--neutral-200) 25%,
+        var(--neutral-300) 50%,
+        var(--neutral-200) 75%
+      );
+      background-size: 200% 100%;
+      animation: loading 1.5s infinite;
+      border-radius: var(--radius-md);
+    }
+    
+    @keyframes loading {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    
+    /* Toggle Switch */
+    .toggle {
       position: relative;
-      width: 60px;
-      height: 34px;
+      display: inline-block;
+      width: 52px;
+      height: 28px;
     }
     
-    .toggle-switch input {
+    .toggle input {
       opacity: 0;
       width: 0;
       height: 0;
@@ -523,566 +866,832 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background-color: #ccc;
-      transition: .4s;
-      border-radius: 34px;
+      background-color: var(--neutral-300);
+      transition: var(--transition-fast);
+      border-radius: var(--radius-full);
     }
     
     .toggle-slider:before {
       position: absolute;
       content: "";
-      height: 26px;
-      width: 26px;
+      height: 20px;
+      width: 20px;
       left: 4px;
       bottom: 4px;
       background-color: white;
-      transition: .4s;
+      transition: var(--transition-fast);
       border-radius: 50%;
     }
     
     input:checked + .toggle-slider {
-      background-color: #667eea;
+      background-color: var(--primary-600);
     }
     
     input:checked + .toggle-slider:before {
-      transform: translateX(26px);
+      transform: translateX(24px);
     }
     
-    @media (max-width: 768px) {
-      .grid-2, .grid-3 {
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .charts-grid {
         grid-template-columns: 1fr;
       }
       
-      .container {
-        padding: 1rem;
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    @media (max-width: 768px) {
+      .menu-toggle {
+        display: block;
+      }
+      
+      .sidebar {
+        position: fixed;
+        top: var(--header-height);
+        left: 0;
+        bottom: 0;
+        transform: translateX(-100%);
+        z-index: 50;
+        box-shadow: var(--shadow-xl);
+      }
+      
+      .sidebar.open {
+        transform: translateX(0);
+      }
+      
+      .main-content {
+        padding: var(--spacing-md);
       }
       
       .stats-grid {
         grid-template-columns: 1fr;
+        gap: var(--spacing-md);
       }
       
-      .tabs {
+      .stat-value {
+        font-size: var(--font-size-2xl);
+      }
+      
+      .section-header {
         flex-direction: column;
+        align-items: flex-start;
       }
       
-      .tab {
+      .btn-group {
         width: 100%;
       }
       
-      .navbar {
-        flex-direction: column;
-        gap: 1rem;
-        text-align: center;
+      .btn {
+        flex: 1;
+      }
+      
+      .alert {
+        left: var(--spacing-md);
+        right: var(--spacing-md);
+        min-width: auto;
+      }
+      
+      .header-actions .uptime span:not(#uptimeValue) {
+        display: none;
+      }
+    }
+    
+    @media (max-width: 480px) {
+      .logo span {
+        display: none;
+      }
+      
+      .chart-container {
+        height: 250px;
+      }
+      
+      .section-card {
+        padding: var(--spacing-md);
+      }
+      
+      .modal-content {
+        padding: var(--spacing-lg);
+      }
+    }
+    
+    /* Print Styles */
+    @media print {
+      .header,
+      .sidebar,
+      .btn,
+      .modal {
+        display: none !important;
+      }
+      
+      .main-content {
+        padding: 0;
+      }
+      
+      .section-card {
+        break-inside: avoid;
+        box-shadow: none;
+        border: 1px solid #000;
       }
     }
   </style>
 </head>
 <body>
-  <div class="alert" id="alert"></div>
-  
-  <div class="navbar">
-    <h1>
-      <i class="fas fa-shield-alt"></i>
-      Redirector Pro Enterprise
-    </h1>
-    <div>
-      <span id="uptime" style="margin-right: 1rem;">
-        <i class="fas fa-clock"></i> <span id="uptimeValue">0h 0m 0s</span>
-      </span>
-      <button onclick="logout()">
-        <i class="fas fa-sign-out-alt"></i>
-        Logout
-      </button>
-    </div>
-  </div>
-  
-  <div class="container">
-    <div class="tabs">
-      <div class="tab active" onclick="showTab('dashboard')">
-        <i class="fas fa-chart-line"></i> Dashboard
-      </div>
-      <div class="tab" onclick="showTab('generate')">
-        <i class="fas fa-link"></i> Generate Link
-      </div>
-      <div class="tab" onclick="showTab('links')">
-        <i class="fas fa-list"></i> All Links
-      </div>
-      <div class="tab" onclick="showTab('analytics')">
-        <i class="fas fa-chart-bar"></i> Analytics
-      </div>
-      <div class="tab" onclick="showTab('logs')">
-        <i class="fas fa-history"></i> Live Logs
-      </div>
-      <div class="tab" onclick="showTab('settings')">
-        <i class="fas fa-cog"></i> Settings
-      </div>
-      <div class="tab" onclick="window.location.href='{{bullBoardPath}}'" id="queuesTab" style="display:none">
-        <i class="fas fa-tasks"></i> Queues
-      </div>
-    </div>
-
-    <!-- Dashboard Tab -->
-    <div id="dashboard" class="tab-content active">
-      <div class="stats-grid">
-        <div class="stat-card">
-          <h3><i class="fas fa-globe"></i> Total Requests</h3>
-          <div class="value" id="totalRequests">0</div>
-          <div class="sub-value">all time</div>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <div class="logo">
+          <i class="fas fa-shield-halved"></i>
+          <span>Redirector Pro</span>
         </div>
-        <div class="stat-card">
-          <h3><i class="fas fa-link"></i> Active Links</h3>
-          <div class="value" id="activeLinks">0</div>
-          <div class="sub-value">current</div>
-        </div>
-        <div class="stat-card">
-          <h3><i class="fas fa-robot"></i> Bot Blocks</h3>
-          <div class="value" id="botBlocks">0</div>
-          <div class="sub-value">threats blocked</div>
-        </div>
-        <div class="stat-card">
-          <h3><i class="fas fa-check-circle"></i> Success Rate</h3>
-          <div class="value" id="successRate">0%</div>
-          <div class="sub-value">last 24h</div>
-        </div>
-      </div>
-
-      <div class="grid-2">
-        <div class="section">
-          <h2><i class="fas fa-chart-line"></i> Requests Over Time</h2>
-          <div class="chart-container">
-            <canvas id="requestsChart"></canvas>
-          </div>
-        </div>
-        <div class="section">
-          <h2><i class="fas fa-mobile-alt"></i> Device Distribution</h2>
-          <div class="chart-container">
-            <canvas id="deviceChart"></canvas>
-          </div>
-        </div>
-      </div>
-
-      <div class="section">
-        <h2><i class="fas fa-map-marker-alt"></i> Top Countries</h2>
-        <div class="stats-list" id="countryStats">
-          <div class="stat-item">
-            <div class="label">Loading...</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Generate Link Tab -->
-    <div id="generate" class="tab-content">
-      <div class="section">
-        <h2><i class="fas fa-plus-circle"></i> Generate New Link</h2>
-        <input type="hidden" name="_csrf" value="{{csrfToken}}">
         
-        <div class="grid-2">
-          <div>
-            <div class="form-group">
-              <label><i class="fas fa-link"></i> Target URL</label>
-              <input type="url" id="targetUrl" placeholder="https://example.com" value="{{TARGET_URL}}">
+        <div class="header-actions">
+          <div class="uptime">
+            <i class="fas fa-clock"></i>
+            <span id="uptimeValue">0h 0m</span>
+          </div>
+          
+          <button class="btn btn-sm" onclick="logout()">
+            <i class="fas fa-sign-out-alt"></i>
+            <span>Logout</span>
+          </button>
+        </div>
+        
+        <button class="menu-toggle" onclick="toggleSidebar()">
+          <i class="fas fa-bars"></i>
+        </button>
+      </div>
+    </header>
+    
+    <div class="main-container">
+      <!-- Sidebar -->
+      <aside class="sidebar" id="sidebar">
+        <nav class="sidebar-nav">
+          <div class="nav-item active" onclick="showTab('dashboard'); toggleSidebar()">
+            <i class="fas fa-chart-line"></i>
+            <span>Dashboard</span>
+          </div>
+          <div class="nav-item" onclick="showTab('generate'); toggleSidebar()">
+            <i class="fas fa-link"></i>
+            <span>Generate Link</span>
+          </div>
+          <div class="nav-item" onclick="showTab('links'); toggleSidebar()">
+            <i class="fas fa-list"></i>
+            <span>All Links</span>
+          </div>
+          <div class="nav-item" onclick="showTab('analytics'); toggleSidebar()">
+            <i class="fas fa-chart-bar"></i>
+            <span>Analytics</span>
+          </div>
+          <div class="nav-item" onclick="showTab('logs'); toggleSidebar()">
+            <i class="fas fa-history"></i>
+            <span>Live Logs</span>
+          </div>
+          <div class="nav-item" onclick="showTab('settings'); toggleSidebar()">
+            <i class="fas fa-cog"></i>
+            <span>Settings</span>
+          </div>
+          <div class="nav-item" id="queuesNavItem" style="display:none" onclick="window.location.href='{{bullBoardPath}}'">
+            <i class="fas fa-tasks"></i>
+            <span>Queues</span>
+          </div>
+        </nav>
+      </aside>
+      
+      <!-- Main Content -->
+      <main class="main-content">
+        <!-- Dashboard Tab -->
+        <div id="dashboard" class="tab-content active">
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-header">
+                <span class="stat-title">Total Requests</span>
+                <span class="stat-icon"><i class="fas fa-globe"></i></span>
+              </div>
+              <div class="stat-value" id="totalRequests">0</div>
+              <div class="stat-trend">
+                <span class="trend-up"><i class="fas fa-arrow-up"></i> +12%</span>
+                <span>vs yesterday</span>
+              </div>
             </div>
             
-            <div class="form-group">
-              <label><i class="fas fa-lock"></i> Password Protection (optional)</label>
-              <input type="password" id="linkPassword" placeholder="Enter password to protect link">
+            <div class="stat-card">
+              <div class="stat-header">
+                <span class="stat-title">Active Links</span>
+                <span class="stat-icon"><i class="fas fa-link"></i></span>
+              </div>
+              <div class="stat-value" id="activeLinks">0</div>
+              <div class="stat-trend">
+                <span class="text-neutral">Current</span>
+              </div>
             </div>
             
-            <div class="form-group">
-              <label><i class="fas fa-sticky-note"></i> Notes (optional)</label>
-              <textarea id="linkNotes" placeholder="Add notes about this link" rows="3"></textarea>
+            <div class="stat-card">
+              <div class="stat-header">
+                <span class="stat-title">Bot Blocks</span>
+                <span class="stat-icon"><i class="fas fa-robot"></i></span>
+              </div>
+              <div class="stat-value" id="botBlocks">0</div>
+              <div class="stat-trend">
+                <span class="trend-down"><i class="fas fa-arrow-down"></i> -5%</span>
+                <span>threats blocked</span>
+              </div>
+            </div>
+            
+            <div class="stat-card">
+              <div class="stat-header">
+                <span class="stat-title">Success Rate</span>
+                <span class="stat-icon"><i class="fas fa-check-circle"></i></span>
+              </div>
+              <div class="stat-value" id="successRate">0%</div>
+              <div class="stat-trend">
+                <span>Last 24 hours</span>
+              </div>
             </div>
           </div>
           
-          <div>
-            <div class="form-group">
-              <label><i class="fas fa-chart-simple"></i> Max Clicks (optional)</label>
-              <input type="number" id="maxClicks" placeholder="Unlimited" min="1">
+          <div class="charts-grid">
+            <div class="chart-card">
+              <div class="chart-header">
+                <h3 class="chart-title">Request Timeline</h3>
+                <div class="btn-group">
+                  <button class="btn btn-sm btn-secondary" onclick="setTimeRange('1m')">1m</button>
+                  <button class="btn btn-sm btn-secondary" onclick="setTimeRange('5m')">5m</button>
+                  <button class="btn btn-sm btn-secondary" onclick="setTimeRange('15m')">15m</button>
+                </div>
+              </div>
+              <div class="chart-container">
+                <canvas id="requestsChart"></canvas>
+              </div>
             </div>
             
-            <div class="form-group">
-              <label><i class="fas fa-hourglass-half"></i> Expires In</label>
-              <select id="expiresIn">
-                <option value="5m">5 minutes</option>
-                <option value="30m" selected>30 minutes</option>
-                <option value="1h">1 hour</option>
-                <option value="6h">6 hours</option>
-                <option value="24h">24 hours</option>
-                <option value="7d">7 days</option>
-                <option value="30d">30 days</option>
-              </select>
+            <div class="chart-card">
+              <div class="chart-header">
+                <h3 class="chart-title">Device Distribution</h3>
+              </div>
+              <div class="chart-container">
+                <canvas id="deviceChart"></canvas>
+              </div>
+            </div>
+          </div>
+          
+          <div class="section-card">
+            <div class="section-header">
+              <h3 class="section-title">
+                <i class="fas fa-map-marker-alt"></i>
+                Geographic Distribution
+              </h3>
+            </div>
+            <div class="stats-grid" id="countryStats">
+              <div class="stat-item">Loading...</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Generate Link Tab -->
+        <div id="generate" class="tab-content">
+          <div class="section-card">
+            <div class="section-header">
+              <h3 class="section-title">
+                <i class="fas fa-plus-circle"></i>
+                Generate New Link
+              </h3>
             </div>
             
-            <div class="form-group">
-              <label><i class="fas fa-qrcode"></i> QR Code Options</label>
-              <div style="display: flex; gap: 1rem;">
-                <label style="display: flex; align-items: center; gap: 0.5rem;">
-                  <input type="checkbox" id="generateQR"> Generate QR code
-                </label>
-                <select id="qrSize" disabled>
-                  <option value="200">Small</option>
-                  <option value="300" selected>Medium</option>
-                  <option value="400">Large</option>
+            <input type="hidden" name="_csrf" value="{{csrfToken}}">
+            
+            <div class="form-grid">
+              <div>
+                <div class="form-group">
+                  <label class="form-label">Target URL</label>
+                  <input type="url" class="form-control" id="targetUrl" placeholder="https://example.com" value="{{TARGET_URL}}">
+                </div>
+                
+                <div class="form-group">
+                  <label class="form-label">Password Protection</label>
+                  <input type="password" class="form-control" id="linkPassword" placeholder="Enter password (optional)">
+                </div>
+                
+                <div class="form-group">
+                  <label class="form-label">Notes</label>
+                  <textarea class="form-control" id="linkNotes" placeholder="Add notes about this link" rows="3"></textarea>
+                </div>
+              </div>
+              
+              <div>
+                <div class="form-group">
+                  <label class="form-label">Max Clicks</label>
+                  <input type="number" class="form-control" id="maxClicks" placeholder="Unlimited" min="1">
+                </div>
+                
+                <div class="form-group">
+                  <label class="form-label">Expires In</label>
+                  <select class="form-control" id="expiresIn">
+                    <option value="5m">5 minutes</option>
+                    <option value="30m" selected>30 minutes</option>
+                    <option value="1h">1 hour</option>
+                    <option value="6h">6 hours</option>
+                    <option value="24h">24 hours</option>
+                    <option value="7d">7 days</option>
+                    <option value="30d">30 days</option>
+                  </select>
+                </div>
+                
+                <div class="form-group">
+                  <label class="form-label">QR Code Options</label>
+                  <div style="display: flex; gap: 1rem; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem;">
+                      <input type="checkbox" id="generateQR"> Generate QR
+                    </label>
+                    <select class="form-control" id="qrSize" disabled style="width: auto;">
+                      <option value="200">Small</option>
+                      <option value="300" selected>Medium</option>
+                      <option value="400">Large</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="btn-group">
+              <button class="btn" onclick="generateLink()">
+                <i class="fas fa-magic"></i>
+                Generate Link
+              </button>
+              <button class="btn btn-secondary" onclick="clearForm()">
+                <i class="fas fa-undo"></i>
+                Clear Form
+              </button>
+            </div>
+            
+            <!-- Result Card -->
+            <div id="result" class="section-card" style="display:none; margin-top: var(--spacing-xl);">
+              <div class="section-header">
+                <h4 class="section-title">
+                  <i class="fas fa-check-circle" style="color: var(--success-500);"></i>
+                  Link Generated Successfully
+                </h4>
+              </div>
+              
+              <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                <input type="text" class="form-control" id="generatedUrl" readonly>
+                <button class="btn btn-secondary" onclick="copyToClipboard()">
+                  <i class="fas fa-copy"></i>
+                </button>
+                <button class="btn btn-secondary" onclick="showQRFromResult()">
+                  <i class="fas fa-qrcode"></i>
+                </button>
+              </div>
+              
+              <div id="qrResult" style="text-align: center;"></div>
+              
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                <div>
+                  <span class="badge badge-info">ID</span>
+                  <code id="generatedId" style="display: block; margin-top: 0.5rem;"></code>
+                </div>
+                <div>
+                  <span class="badge badge-info">Expires</span>
+                  <div id="generatedExpires" style="margin-top: 0.5rem;"></div>
+                </div>
+                <div>
+                  <span class="badge badge-info">Protected</span>
+                  <div id="generatedPassword" style="margin-top: 0.5rem;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- All Links Tab -->
+        <div id="links" class="tab-content">
+          <div class="section-card">
+            <div class="section-header">
+              <h3 class="section-title">
+                <i class="fas fa-list"></i>
+                All Links
+              </h3>
+              
+              <div class="btn-group">
+                <input type="text" class="form-control" id="linkSearch" placeholder="Search links..." style="width: 250px;">
+                <select class="form-control" id="linkFilter" style="width: 150px;">
+                  <option value="all">All Links</option>
+                  <option value="active">Active</option>
+                  <option value="expired">Expired</option>
+                  <option value="completed">Completed</option>
                 </select>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <div style="display: flex; gap: 1rem; margin-top: 1rem;">
-          <button onclick="generateLink()">
-            <i class="fas fa-magic"></i>
-            Generate Link
-          </button>
-          <button class="secondary" onclick="clearForm()">
-            <i class="fas fa-undo"></i>
-            Clear Form
-          </button>
-        </div>
-        
-        <div id="result" class="result-box" style="display:none">
-          <h3><i class="fas fa-check-circle" style="color:#48bb78"></i> Link Generated Successfully!</h3>
-          <div class="url-display">
-            <input type="text" id="generatedUrl" readonly>
-            <button class="secondary" onclick="copyToClipboard()">
-              <i class="fas fa-copy"></i> Copy
-            </button>
-            <button class="secondary" onclick="showQRFromResult()">
-              <i class="fas fa-qrcode"></i> QR Code
-            </button>
-          </div>
-          <div id="qrResult"></div>
-          <div style="margin-top: 1rem; padding: 1rem; background: #e3f2fd; border-radius: 8px;">
-            <p style="color: #1976d2; margin-bottom: 0.5rem;">
-              <i class="fas fa-info-circle"></i> Link Details:
-            </p>
-            <p><strong>ID:</strong> <span id="generatedId"></span></p>
-            <p><strong>Expires:</strong> <span id="generatedExpires"></span></p>
-            <p><strong>Password Protected:</strong> <span id="generatedPassword"></span></p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- All Links Tab -->
-    <div id="links" class="tab-content">
-      <div class="section">
-        <h2><i class="fas fa-list"></i> All Links</h2>
-        
-        <div style="margin-bottom: 1rem; display: flex; gap: 1rem;">
-          <input type="text" id="linkSearch" placeholder="Search links..." style="flex: 1;">
-          <select id="linkFilter">
-            <option value="all">All Links</option>
-            <option value="active">Active</option>
-            <option value="expired">Expired</option>
-            <option value="completed">Completed</option>
-          </select>
-          <button onclick="refreshLinks()">
-            <i class="fas fa-sync-alt"></i> Refresh
-          </button>
-        </div>
-        
-        <div style="overflow-x: auto;">
-          <table class="links-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Target URL</th>
-                <th>Created</th>
-                <th>Expires</th>
-                <th>Clicks</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="linksTableBody">
-              <tr>
-                <td colspan="7" style="text-align: center; padding: 2rem;">
-                  <i class="fas fa-spinner fa-spin"></i> Loading links...
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- Analytics Tab -->
-    <div id="analytics" class="tab-content">
-      <div class="section">
-        <h2><i class="fas fa-chart-bar"></i> Link Analytics</h2>
-        
-        <div class="grid-2">
-          <div>
-            <div class="form-group">
-              <label><i class="fas fa-search"></i> Enter Link ID</label>
-              <input type="text" id="analyticsLinkId" placeholder="e.g., a1b2c3d4e5f6g7h8..." style="font-family: monospace;">
-            </div>
-            <button onclick="getLinkStats()">
-              <i class="fas fa-chart-line"></i> Get Statistics
-            </button>
-          </div>
-          
-          <div>
-            <div class="form-group">
-              <label><i class="fas fa-download"></i> Export Options</label>
-              <div style="display: flex; gap: 1rem;">
-                <button class="secondary" onclick="exportData('csv')">
-                  <i class="fas fa-file-csv"></i> Export CSV
-                </button>
-                <button class="secondary" onclick="exportData('json')">
-                  <i class="fas fa-file-code"></i> Export JSON
+                <button class="btn btn-secondary" onclick="refreshLinks()">
+                  <i class="fas fa-sync-alt"></i>
                 </button>
               </div>
             </div>
-          </div>
-        </div>
-        
-        <div id="linkStats" class="result-box" style="display:none">
-          <h3><i class="fas fa-chart-pie"></i> Link Statistics</h3>
-          <div class="grid-3" id="statsContent"></div>
-          
-          <div style="margin-top: 2rem;">
-            <h4><i class="fas fa-history"></i> Recent Clicks</h4>
-            <div style="overflow-x: auto;">
-              <table class="links-table">
+            
+            <div class="table-container">
+              <table class="table">
                 <thead>
                   <tr>
-                    <th>Time</th>
-                    <th>IP</th>
-                    <th>Country</th>
-                    <th>Device</th>
+                    <th>ID</th>
+                    <th>Target URL</th>
+                    <th>Created</th>
+                    <th>Expires</th>
+                    <th>Clicks</th>
+                    <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
-                <tbody id="recentClicksTable"></tbody>
+                <tbody id="linksTableBody">
+                  <tr>
+                    <td colspan="7" style="text-align: center; padding: 2rem;">
+                      <i class="fas fa-spinner fa-spin"></i> Loading links...
+                    </td>
+                  </tr>
+                </tbody>
               </table>
             </div>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- Live Logs Tab -->
-    <div id="logs" class="tab-content">
-      <div class="section">
-        <h2><i class="fas fa-history"></i> Live Activity Logs</h2>
-        <div style="margin-bottom: 1rem; display: flex; gap: 1rem;">
-          <button class="secondary" onclick="clearLogs()">
-            <i class="fas fa-trash"></i> Clear Logs
-          </button>
-          <button class="secondary" onclick="exportLogs()">
-            <i class="fas fa-download"></i> Export Logs
-          </button>
-          <label style="display: flex; align-items: center; gap: 0.5rem;">
-            <input type="checkbox" id="autoScroll" checked> Auto-scroll
-          </label>
-        </div>
-        <div class="logs-container" id="logs"></div>
-      </div>
-    </div>
-
-    <!-- Settings Tab -->
-    <div id="settings" class="tab-content">
-      <div class="grid-2">
-        <div class="section">
-          <h2><i class="fas fa-database"></i> Cache Management</h2>
-          <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-            <button onclick="clearCache()" class="danger">
-              <i class="fas fa-trash-alt"></i> Clear All Caches
-            </button>
-            <button class="secondary" onclick="clearGeoCache()">
-              <i class="fas fa-globe"></i> Clear Geo Cache
-            </button>
-            <button class="secondary" onclick="clearQRCache()">
-              <i class="fas fa-qrcode"></i> Clear QR Cache
-            </button>
-          </div>
-          
-          <div style="margin-top: 2rem;">
-            <h3><i class="fas fa-chart-simple"></i> Cache Stats</h3>
-            <div class="stats-list">
-              <div class="stat-item">
-                <div class="label">Link Cache</div>
-                <div class="number" id="cacheLinks">0</div>
+        
+        <!-- Analytics Tab -->
+        <div id="analytics" class="tab-content">
+          <div class="section-card">
+            <div class="section-header">
+              <h3 class="section-title">
+                <i class="fas fa-chart-bar"></i>
+                Link Analytics
+              </h3>
+            </div>
+            
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem;">
+              <div style="flex: 1; min-width: 300px;">
+                <div class="form-group">
+                  <label class="form-label">Enter Link ID</label>
+                  <input type="text" class="form-control" id="analyticsLinkId" placeholder="e.g., a1b2c3d4e5f6g7h8...">
+                </div>
+                <button class="btn" onclick="getLinkStats()">
+                  <i class="fas fa-chart-line"></i> Get Statistics
+                </button>
               </div>
-              <div class="stat-item">
-                <div class="label">Geo Cache</div>
-                <div class="number" id="cacheGeo">0</div>
+              
+              <div style="flex: 1; min-width: 300px;">
+                <div class="form-group">
+                  <label class="form-label">Export Options</label>
+                  <div class="btn-group">
+                    <button class="btn btn-secondary" onclick="exportData('csv')">
+                      <i class="fas fa-file-csv"></i> CSV
+                    </button>
+                    <button class="btn btn-secondary" onclick="exportData('json')">
+                      <i class="fas fa-file-code"></i> JSON
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div class="stat-item">
-                <div class="label">QR Cache</div>
-                <div class="number" id="cacheQR">0</div>
+            </div>
+            
+            <!-- Link Stats -->
+            <div id="linkStats" style="display: none;">
+              <div class="stats-grid" id="statsContent"></div>
+              
+              <div style="margin-top: 2rem;">
+                <h4 class="section-title" style="margin-bottom: 1rem;">
+                  <i class="fas fa-history"></i>
+                  Recent Clicks
+                </h4>
+                <div class="table-container">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>IP</th>
+                        <th>Country</th>
+                        <th>Device</th>
+                      </tr>
+                    </thead>
+                    <tbody id="recentClicksTable"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
         </div>
         
-        <div class="section">
-          <h2><i class="fas fa-sliders-h"></i> System Settings</h2>
-          
-          <div class="setting-item">
-            <span><i class="fas fa-hourglass-half"></i> Link TTL</span>
-            <select id="settingLinkTTL">
-              <option value="300">5 minutes</option>
-              <option value="1800" selected>30 minutes</option>
-              <option value="3600">1 hour</option>
-              <option value="21600">6 hours</option>
-              <option value="86400">24 hours</option>
-            </select>
-          </div>
-          
-          <div class="setting-item">
-            <span><i class="fas fa-shield-alt"></i> Desktop Challenge</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="settingDesktopChallenge" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          
-          <div class="setting-item">
-            <span><i class="fas fa-robot"></i> Bot Detection</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="settingBotDetection" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          
-          <div class="setting-item">
-            <span><i class="fas fa-chart-line"></i> Real-time Analytics</span>
-            <label class="toggle-switch">
-              <input type="checkbox" id="settingAnalytics" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          
-          <button onclick="saveSettings()" style="margin-top: 1rem; width: 100%;">
-            <i class="fas fa-save"></i> Save Settings
-          </button>
-        </div>
-      </div>
-      
-      <div class="section">
-        <h2><i class="fas fa-info-circle"></i> System Information</h2>
-        <div class="system-status">
-          <div class="status-card">
-            <div class="title"><i class="fas fa-plug"></i> Socket Connection</div>
-            <div class="status connected" id="socketStatus">Connected</div>
-          </div>
-          <div class="status-card">
-            <div class="title"><i class="fas fa-database"></i> Database</div>
-            <div class="status {{dbPoolStatus}}" id="dbStatus">
-              {{dbPoolStatus === 'connected' ? 'Connected' : 'Disconnected'}}
+        <!-- Live Logs Tab -->
+        <div id="logs" class="tab-content">
+          <div class="section-card">
+            <div class="section-header">
+              <h3 class="section-title">
+                <i class="fas fa-history"></i>
+                Live Activity Logs
+              </h3>
+              
+              <div class="btn-group">
+                <button class="btn btn-secondary" onclick="clearLogs()">
+                  <i class="fas fa-trash"></i> Clear
+                </button>
+                <button class="btn btn-secondary" onclick="exportLogs()">
+                  <i class="fas fa-download"></i> Export
+                </button>
+                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                  <input type="checkbox" id="autoScroll" checked> Auto-scroll
+                </label>
+              </div>
             </div>
-          </div>
-          <div class="status-card">
-            <div class="title"><i class="fas fa-memory"></i> Redis</div>
-            <div class="status {{redisStatus}}" id="redisStatus">
-              {{redisStatus === 'connected' ? 'Connected' : 'Disconnected'}}
-            </div>
-          </div>
-          <div class="status-card">
-            <div class="title"><i class="fas fa-tasks"></i> Queues</div>
-            <div class="status {{redirectQueueStatus}}">
-              {{redirectQueueStatus === 'connected' ? 'Active' : 'Inactive'}}
-            </div>
+            
+            <div class="logs-container" id="logs"></div>
           </div>
         </div>
         
-        <div style="margin-top: 2rem;">
-          <p><strong><i class="fas fa-code-branch"></i> Version:</strong> 3.0.0 Enterprise</p>
-          <p><strong><i class="fab fa-node"></i> Node.js:</strong> <span id="nodeVersion"></span></p>
-          <p><strong><i class="fas fa-laptop"></i> Platform:</strong> <span id="platform"></span></p>
-          <p><strong><i class="fas fa-microchip"></i> Memory Usage:</strong> <span id="memoryUsage"></span> MB</p>
-          <p><strong><i class="fas fa-clock"></i> Uptime:</strong> <span id="systemUptime"></span></p>
+        <!-- Settings Tab -->
+        <div id="settings" class="tab-content">
+          <div class="grid-2" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem;">
+            <!-- Cache Management -->
+            <div class="section-card">
+              <h3 class="section-title" style="margin-bottom: 1.5rem;">
+                <i class="fas fa-database"></i>
+                Cache Management
+              </h3>
+              
+              <div class="btn-group" style="margin-bottom: 2rem;">
+                <button class="btn btn-danger" onclick="clearCache()">
+                  <i class="fas fa-trash-alt"></i> Clear All
+                </button>
+                <button class="btn btn-secondary" onclick="clearGeoCache()">
+                  <i class="fas fa-globe"></i> Clear Geo
+                </button>
+                <button class="btn btn-secondary" onclick="clearQRCache()">
+                  <i class="fas fa-qrcode"></i> Clear QR
+                </button>
+              </div>
+              
+              <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+                <div class="stat-item">
+                  <div class="stat-label">Link Cache</div>
+                  <div class="stat-number" id="cacheLinks">0</div>
+                </div>
+                <div class="stat-item">
+                  <div class="stat-label">Geo Cache</div>
+                  <div class="stat-number" id="cacheGeo">0</div>
+                </div>
+                <div class="stat-item">
+                  <div class="stat-label">QR Cache</div>
+                  <div class="stat-number" id="cacheQR">0</div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- System Settings -->
+            <div class="section-card">
+              <h3 class="section-title" style="margin-bottom: 1.5rem;">
+                <i class="fas fa-sliders-h"></i>
+                System Settings
+              </h3>
+              
+              <div class="form-group">
+                <label class="form-label">Link TTL</label>
+                <select class="form-control" id="settingLinkTTL">
+                  <option value="300">5 minutes</option>
+                  <option value="1800" selected>30 minutes</option>
+                  <option value="3600">1 hour</option>
+                  <option value="21600">6 hours</option>
+                  <option value="86400">24 hours</option>
+                </select>
+              </div>
+              
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                <span>Desktop Challenge</span>
+                <label class="toggle">
+                  <input type="checkbox" id="settingDesktopChallenge" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                <span>Bot Detection</span>
+                <label class="toggle">
+                  <input type="checkbox" id="settingBotDetection" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+                <span>Real-time Analytics</span>
+                <label class="toggle">
+                  <input type="checkbox" id="settingAnalytics" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              
+              <button class="btn" style="width: 100%;" onclick="saveSettings()">
+                <i class="fas fa-save"></i> Save Settings
+              </button>
+            </div>
+          </div>
+          
+          <!-- System Information -->
+          <div class="section-card" style="margin-top: 1.5rem;">
+            <h3 class="section-title" style="margin-bottom: 1.5rem;">
+              <i class="fas fa-info-circle"></i>
+              System Information
+            </h3>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+              <div class="status-item">
+                <span class="status-dot connected" id="socketStatus"></span>
+                <span>Socket Connection</span>
+              </div>
+              <div class="status-item">
+                <span class="status-dot {{dbPoolStatus}}" id="dbStatus"></span>
+                <span>Database</span>
+              </div>
+              <div class="status-item">
+                <span class="status-dot {{redisStatus}}" id="redisStatus"></span>
+                <span>Redis</span>
+              </div>
+              <div class="status-item">
+                <span class="status-dot {{redirectQueueStatus}}" id="queueStatus"></span>
+                <span>Queues</span>
+              </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 2rem;">
+              <div>
+                <span class="badge badge-info">Version</span>
+                <div>3.0.0 Enterprise</div>
+              </div>
+              <div>
+                <span class="badge badge-info">Memory</span>
+                <div id="memoryUsage">0 MB</div>
+              </div>
+              <div>
+                <span class="badge badge-info">Uptime</span>
+                <div id="systemUptime">0h 0m</div>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      </main>
     </div>
   </div>
-
+  
   <!-- Link Details Modal -->
-  <div id="linkModal" class="modal">
+  <div class="modal" id="linkModal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3><i class="fas fa-link"></i> Link Details</h3>
-        <span class="modal-close" onclick="closeModal()">&times;</span>
+        <h3 class="modal-title">
+          <i class="fas fa-link"></i>
+          Link Details
+        </h3>
+        <button class="modal-close" onclick="closeModal()">
+          <i class="fas fa-times"></i>
+        </button>
       </div>
       <div id="linkModalContent"></div>
     </div>
   </div>
-
+  
+  <!-- Alert Container -->
+  <div class="alert" id="alert"></div>
+  
   <script>
     // Server-side injected variables
     const METRICS_API_KEY = '{{METRICS_API_KEY}}';
     const TARGET_URL = '{{TARGET_URL}}';
     const CSRF_TOKEN = '{{csrfToken}}';
     
-    // Socket.IO connection
-    const socket = io({
-      auth: { token: METRICS_API_KEY },
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000
-    });
-    
+    // State
+    let socket;
     let requestsChart, deviceChart;
     let allLinks = [];
     let autoScroll = true;
+    let currentTimeRange = '5m';
     
-    // Socket event handlers
-    socket.on('connect', () => {
-      console.log('✅ Socket connected');
-      showAlert('Real-time monitoring connected', 'success');
-      document.getElementById('socketStatus').textContent = 'Connected';
-      document.getElementById('socketStatus').className = 'status connected';
-    });
+    // Initialize Socket.IO
+    function initSocket() {
+      socket = io({
+        auth: { token: METRICS_API_KEY },
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000
+      });
+      
+      socket.on('connect', () => {
+        console.log('Socket connected');
+        showAlert('Real-time monitoring connected', 'success');
+        updateSocketStatus('connected');
+      });
+      
+      socket.on('disconnect', () => {
+        console.log('Socket disconnected');
+        showAlert('Real-time monitoring disconnected', 'error');
+        updateSocketStatus('disconnected');
+      });
+      
+      socket.on('stats', (data) => {
+        updateStats(data);
+        updateCharts(data);
+        updateCountryStats(data.byCountry);
+        updateCacheStats(data.caches);
+      });
+      
+      socket.on('log', (log) => {
+        addLogEntry(log);
+      });
+      
+      socket.on('link-generated', () => {
+        showAlert('New link generated', 'info');
+        refreshLinks();
+      });
+      
+      socket.on('link-deleted', () => {
+        refreshLinks();
+      });
+      
+      socket.on('link-updated', () => {
+        refreshLinks();
+      });
+      
+      socket.on('links', (links) => {
+        allLinks = links;
+        renderLinksTable(links);
+      });
+      
+      socket.on('notification', (notification) => {
+        showAlert(notification.message, notification.type);
+      });
+      
+      // Request initial data
+      socket.emit('command', { action: 'getStats' });
+      socket.emit('command', { action: 'getLinks' });
+    }
     
-    socket.on('disconnect', () => {
-      console.log('❌ Socket disconnected');
-      showAlert('Real-time monitoring disconnected', 'error');
-      document.getElementById('socketStatus').textContent = 'Disconnected';
-      document.getElementById('socketStatus').className = 'status disconnected';
-    });
+    // UI Functions
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('open');
+    }
     
-    socket.on('stats', (data) => {
-      updateStats(data);
-      updateCharts(data);
-      updateCountryStats(data.byCountry);
-      updateCacheStats(data.caches);
-    });
+    function showTab(tabId) {
+      // Update navigation
+      document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.remove('active');
+      });
+      
+      // Find and activate the clicked nav item
+      document.querySelectorAll('.nav-item').forEach(item => {
+        if (item.textContent.toLowerCase().includes(tabId)) {
+          item.classList.add('active');
+        }
+      });
+      
+      // Update tab content
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      document.getElementById(tabId).classList.add('active');
+      
+      // Close sidebar on mobile
+      if (window.innerWidth <= 768) {
+        document.getElementById('sidebar').classList.remove('open');
+      }
+      
+      // Load data for specific tabs
+      if (tabId === 'links') {
+        refreshLinks();
+      }
+    }
     
-    socket.on('log', (log) => {
-      addLogEntry(log);
-    });
+    function showAlert(message, type = 'info') {
+      const alert = document.getElementById('alert');
+      alert.className = `alert alert-${type}`;
+      alert.innerHTML = `
+        <div class="alert-icon">
+          <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i>
+        </div>
+        <div class="alert-content">
+          <div class="alert-title">${type.charAt(0).toUpperCase() + type.slice(1)}</div>
+          <div class="alert-message">${message}</div>
+        </div>
+      `;
+      alert.style.display = 'flex';
+      
+      setTimeout(() => {
+        alert.style.display = 'none';
+      }, 5000);
+    }
     
-    socket.on('link-generated', (link) => {
-      showAlert('New link generated: ' + link.id, 'info');
-      refreshLinks();
-    });
+    function updateSocketStatus(status) {
+      const socketStatus = document.getElementById('socketStatus');
+      if (socketStatus) {
+        socketStatus.className = `status-dot ${status}`;
+      }
+    }
     
-    socket.on('link-deleted', () => {
-      refreshLinks();
-    });
-    
-    socket.on('link-updated', () => {
-      refreshLinks();
-    });
-    
-    socket.on('links', (links) => {
-      allLinks = links;
-      renderLinksTable(links);
-    });
-    
-    socket.on('notification', (notification) => {
-      showAlert(notification.message, notification.type);
-    });
-    
-    // Update functions
     function updateStats(data) {
-      document.getElementById('totalRequests').textContent = data.totalRequests?.toLocaleString() || '0';
-      document.getElementById('activeLinks').textContent = data.realtime?.activeLinks?.toLocaleString() || '0';
-      document.getElementById('botBlocks').textContent = data.botBlocks?.toLocaleString() || '0';
+      document.getElementById('totalRequests').textContent = formatNumber(data.totalRequests || 0);
+      document.getElementById('activeLinks').textContent = formatNumber(data.realtime?.activeLinks || 0);
+      document.getElementById('botBlocks').textContent = formatNumber(data.botBlocks || 0);
       
       const successRate = data.totalRequests ? 
         ((data.successfulRedirects / data.totalRequests) * 100).toFixed(1) : 0;
@@ -1091,28 +1700,36 @@
     
     function updateCacheStats(caches) {
       if (caches) {
-        document.getElementById('cacheLinks').textContent = caches.linkReq?.toLocaleString() || '0';
-        document.getElementById('cacheGeo').textContent = caches.geo?.toLocaleString() || '0';
-        document.getElementById('cacheQR').textContent = caches.qr?.toLocaleString() || '0';
+        document.getElementById('cacheLinks').textContent = formatNumber(caches.linkReq || 0);
+        document.getElementById('cacheGeo').textContent = formatNumber(caches.geo || 0);
+        document.getElementById('cacheQR').textContent = formatNumber(caches.qr || 0);
       }
     }
     
     function updateCharts(data) {
-      const ctx1 = document.getElementById('requestsChart').getContext('2d');
-      const ctx2 = document.getElementById('deviceChart').getContext('2d');
+      const ctx1 = document.getElementById('requestsChart')?.getContext('2d');
+      const ctx2 = document.getElementById('deviceChart')?.getContext('2d');
       
+      if (!ctx1 || !ctx2) return;
+      
+      // Destroy existing charts
       if (requestsChart) requestsChart.destroy();
       if (deviceChart) deviceChart.destroy();
       
+      // Prepare data based on time range
       const lastMinute = data.realtime?.lastMinute || [];
-      const timestamps = lastMinute.map(d => {
+      const points = currentTimeRange === '1m' ? 60 : currentTimeRange === '5m' ? 300 : 900;
+      
+      const timestamps = lastMinute.slice(-points).map(d => {
         const date = new Date(d.time);
         return date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0') + ':' + date.getSeconds().toString().padStart(2, '0');
       });
-      const requests = lastMinute.map(d => d.requests || 0);
-      const blocks = lastMinute.map(d => d.blocks || 0);
-      const successes = lastMinute.map(d => d.successes || 0);
       
+      const requests = lastMinute.slice(-points).map(d => d.requests || 0);
+      const blocks = lastMinute.slice(-points).map(d => d.blocks || 0);
+      const successes = lastMinute.slice(-points).map(d => d.successes || 0);
+      
+      // Requests Chart
       requestsChart = new Chart(ctx1, {
         type: 'line',
         data: {
@@ -1121,41 +1738,75 @@
             {
               label: 'Requests',
               data: requests,
-              borderColor: '#667eea',
-              backgroundColor: 'rgba(102,126,234,0.1)',
+              borderColor: '#6366f1',
+              backgroundColor: 'rgba(99, 102, 241, 0.1)',
               tension: 0.4,
-              fill: true
+              fill: true,
+              pointRadius: 2,
+              pointHoverRadius: 5
             },
             {
               label: 'Successful',
               data: successes,
-              borderColor: '#48bb78',
-              backgroundColor: 'rgba(72,187,120,0.1)',
+              borderColor: '#22c55e',
+              backgroundColor: 'rgba(34, 197, 94, 0.1)',
               tension: 0.4,
-              fill: true
+              fill: true,
+              pointRadius: 2,
+              pointHoverRadius: 5
             },
             {
               label: 'Blocks',
               data: blocks,
-              borderColor: '#f56565',
-              backgroundColor: 'rgba(245,101,101,0.1)',
+              borderColor: '#ef4444',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
               tension: 0.4,
-              fill: true
+              fill: true,
+              pointRadius: 2,
+              pointHoverRadius: 5
             }
           ]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          interaction: { mode: 'index', intersect: false },
-          plugins: { legend: { position: 'top' } },
+          interaction: {
+            mode: 'index',
+            intersect: false
+          },
+          plugins: {
+            legend: {
+              position: 'top',
+              labels: {
+                usePointStyle: true,
+                boxWidth: 6
+              }
+            },
+            tooltip: {
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
+              titleColor: '#fff',
+              bodyColor: '#fff',
+              borderColor: 'rgba(255, 255, 255, 0.1)',
+              borderWidth: 1
+            }
+          },
           scales: {
-            y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
-            x: { grid: { display: false } }
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: 'rgba(0, 0, 0, 0.05)'
+              }
+            },
+            x: {
+              grid: {
+                display: false
+              }
+            }
           }
         }
       });
       
+      // Device Chart
       deviceChart = new Chart(ctx2, {
         type: 'doughnut',
         data: {
@@ -1167,15 +1818,36 @@
               data.byDevice?.tablet || 0,
               data.byDevice?.bot || 0
             ],
-            backgroundColor: ['#48bb78', '#4299e1', '#ed8936', '#f56565'],
-            borderWidth: 0
+            backgroundColor: ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444'],
+            borderWidth: 0,
+            hoverOffset: 4
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: { legend: { position: 'bottom' } },
-          cutout: '60%'
+          cutout: '70%',
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                usePointStyle: true,
+                boxWidth: 8,
+                padding: 20
+              }
+            },
+            tooltip: {
+              callbacks: {
+                label: (context) => {
+                  const label = context.label || '';
+                  const value = context.raw || 0;
+                  const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                  const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                  return `${label}: ${formatNumber(value)} (${percentage}%)`;
+                }
+              }
+            }
+          }
         }
       });
     }
@@ -1183,7 +1855,7 @@
     function updateCountryStats(countries) {
       const container = document.getElementById('countryStats');
       if (!countries || Object.keys(countries).length === 0) {
-        container.innerHTML = '<div class="stat-item"><div class="label">No data yet</div></div>';
+        container.innerHTML = '<div class="stat-item">No data yet</div>';
         return;
       }
       
@@ -1192,9 +1864,13 @@
         .slice(0, 8);
       
       container.innerHTML = sorted.map(([country, count]) => `
-        <div class="stat-item">
-          <div class="label">${country}</div>
-          <div class="number">${count.toLocaleString()}</div>
+        <div class="stat-card">
+          <div class="stat-header">
+            <span class="stat-title">${country}</span>
+            <span class="stat-icon"><i class="fas fa-flag"></i></span>
+          </div>
+          <div class="stat-value">${formatNumber(count)}</div>
+          <div class="stat-trend">requests</div>
         </div>
       `).join('');
     }
@@ -1206,12 +1882,12 @@
       
       const time = new Date(log.t).toLocaleTimeString();
       const device = log.device || 'unknown';
-      let emoji = '🌐';
-      if (device === 'mobile') emoji = '📱';
-      else if (device === 'tablet') emoji = '📟';
-      else if (device === 'bot') emoji = '🤖';
+      let icon = '🌐';
+      if (device === 'mobile') icon = '📱';
+      else if (device === 'tablet') icon = '📟';
+      else if (device === 'bot') icon = '🤖';
       
-      entry.innerHTML = `[${time}] ${emoji} ${log.ip} ${log.method} ${log.path} [${device}] ${log.duration}ms`;
+      entry.innerHTML = `[${time}] ${icon} ${log.ip || '0.0.0.0'} ${log.method || 'GET'} ${log.path || '/'} [${device}] ${log.duration || 0}ms`;
       
       logs.insertBefore(entry, logs.firstChild);
       if (logs.children.length > 200) logs.removeChild(logs.lastChild);
@@ -1219,11 +1895,6 @@
       if (document.getElementById('autoScroll').checked) {
         logs.scrollTop = 0;
       }
-    }
-    
-    function clearLogs() {
-      document.getElementById('logs').innerHTML = '';
-      showAlert('Logs cleared', 'success');
     }
     
     function renderLinksTable(links) {
@@ -1249,36 +1920,60 @@
         return true;
       });
       
+      if (filtered.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="7" style="text-align: center; padding: 2rem;">
+              No matching links found
+            </td>
+          </tr>
+        `;
+        return;
+      }
+      
       tbody.innerHTML = filtered.map(link => `
         <tr>
           <td><code>${link.id.substring(0, 8)}...</code></td>
-          <td><a href="${link.target_url}" target="_blank" rel="noopener">${link.target_url.substring(0, 30)}...</a></td>
+          <td>
+            <a href="${link.target_url}" target="_blank" rel="noopener" style="color: var(--primary-600); text-decoration: none;">
+              ${link.target_url.substring(0, 40)}${link.target_url.length > 40 ? '...' : ''}
+            </a>
+          </td>
           <td>${new Date(link.created_at).toLocaleString()}</td>
           <td>${new Date(link.expires_at).toLocaleString()}</td>
-          <td>${link.current_clicks || 0}${link.max_clicks ? '/' + link.max_clicks : ''}</td>
-          <td><span class="badge ${link.status}">${link.status}</span></td>
-          <td class="action-buttons">
-            <button onclick="viewLink('${link.id}')" title="View Details">
-              <i class="fas fa-eye"></i>
-            </button>
-            <button class="secondary" onclick="copyLink('${link.id}')" title="Copy Link">
-              <i class="fas fa-copy"></i>
-            </button>
-            <button class="danger" onclick="deleteLink('${link.id}')" title="Delete">
-              <i class="fas fa-trash"></i>
-            </button>
+          <td>
+            <span style="font-weight: 600;">${formatNumber(link.current_clicks || 0)}</span>
+            ${link.max_clicks ? '/' + formatNumber(link.max_clicks) : ''}
+          </td>
+          <td>
+            <span class="badge badge-${link.status === 'active' ? 'success' : link.status === 'expired' ? 'error' : 'warning'}">
+              ${link.status}
+            </span>
+          </td>
+          <td>
+            <div class="btn-group" style="gap: 0.25rem;">
+              <button class="btn btn-sm btn-secondary" onclick="viewLink('${link.id}')" title="View Details">
+                <i class="fas fa-eye"></i>
+              </button>
+              <button class="btn btn-sm btn-secondary" onclick="copyLink('${link.id}')" title="Copy Link">
+                <i class="fas fa-copy"></i>
+              </button>
+              <button class="btn btn-sm btn-danger" onclick="deleteLink('${link.id}')" title="Delete">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
           </td>
         </tr>
       `).join('');
     }
     
+    // Link Management
     async function generateLink() {
       const url = document.getElementById('targetUrl').value;
       const password = document.getElementById('linkPassword').value;
       const maxClicks = document.getElementById('maxClicks').value;
       const expiresIn = document.getElementById('expiresIn').value;
       const notes = document.getElementById('linkNotes').value;
-      const generateQR = document.getElementById('generateQR')?.checked || false;
       
       if (!url) {
         showAlert('Please enter a URL', 'error');
@@ -1310,7 +2005,7 @@
           document.getElementById('generatedPassword').textContent = data.passwordProtected ? 'Yes' : 'No';
           document.getElementById('result').style.display = 'block';
           
-          if (generateQR) {
+          if (document.getElementById('generateQR')?.checked) {
             const size = document.getElementById('qrSize').value;
             await showQRForUrl(data.url, size);
           }
@@ -1332,10 +2027,9 @@
         if (res.ok) {
           const data = await res.json();
           document.getElementById('qrResult').innerHTML = `
-            <h4>QR Code:</h4>
-            <img src="${data.qr}" alt="QR Code" style="max-width: 200px;">
+            <img src="${data.qr}" alt="QR Code" style="max-width: 200px; border-radius: 8px; box-shadow: var(--shadow-md);">
             <div style="margin-top: 1rem;">
-              <button class="secondary" onclick="downloadQR('${url}', ${size})">
+              <button class="btn btn-sm btn-secondary" onclick="downloadQR('${url}', ${size})">
                 <i class="fas fa-download"></i> Download PNG
               </button>
             </div>
@@ -1344,16 +2038,6 @@
       } catch (err) {
         showAlert('Failed to generate QR code', 'error');
       }
-    }
-    
-    async function downloadQR(url, size) {
-      window.location.href = '/qr/download?url=' + encodeURIComponent(url) + '&size=' + size;
-    }
-    
-    function showQRFromResult() {
-      const url = document.getElementById('generatedUrl').value;
-      const size = document.getElementById('qrSize')?.value || 300;
-      showQRForUrl(url, size);
     }
     
     async function getLinkStats() {
@@ -1372,33 +2056,36 @@
           let statsHtml = '';
           if (stats.exists) {
             statsHtml = `
-              <div class="stat-item">
-                <div class="label">Total Clicks</div>
-                <div class="number">${stats.clicks || 0}</div>
+              <div class="stat-card">
+                <div class="stat-header">
+                  <span class="stat-title">Total Clicks</span>
+                  <span class="stat-icon"><i class="fas fa-mouse-pointer"></i></span>
+                </div>
+                <div class="stat-value">${formatNumber(stats.clicks || 0)}</div>
               </div>
-              <div class="stat-item">
-                <div class="label">Unique Visitors</div>
-                <div class="number">${stats.uniqueVisitors || 0}</div>
+              <div class="stat-card">
+                <div class="stat-header">
+                  <span class="stat-title">Unique Visitors</span>
+                  <span class="stat-icon"><i class="fas fa-users"></i></span>
+                </div>
+                <div class="stat-value">${formatNumber(stats.uniqueVisitors || 0)}</div>
               </div>
-              <div class="stat-item">
-                <div class="label">Max Clicks</div>
-                <div class="number">${stats.maxClicks || '∞'}</div>
+              <div class="stat-card">
+                <div class="stat-header">
+                  <span class="stat-title">Max Clicks</span>
+                  <span class="stat-icon"><i class="fas fa-chart-simple"></i></span>
+                </div>
+                <div class="stat-value">${stats.maxClicks ? formatNumber(stats.maxClicks) : '∞'}</div>
               </div>
-              <div class="stat-item">
-                <div class="label">Created</div>
-                <div class="number" style="font-size:1rem">${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</div>
-              </div>
-              <div class="stat-item">
-                <div class="label">Expires</div>
-                <div class="number" style="font-size:1rem">${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</div>
-              </div>
-              <div class="stat-item">
-                <div class="label">Password Protected</div>
-                <div class="number" style="font-size:1rem">${stats.passwordProtected ? 'Yes' : 'No'}</div>
+              <div class="stat-card">
+                <div class="stat-header">
+                  <span class="stat-title">Created</span>
+                  <span class="stat-icon"><i class="fas fa-calendar"></i></span>
+                </div>
+                <div class="stat-value" style="font-size: 1.25rem;">${stats.created ? new Date(stats.created).toLocaleDateString() : 'N/A'}</div>
               </div>
             `;
             
-            // Recent clicks table
             const recentHtml = stats.recentClicks?.map(click => `
               <tr>
                 <td>${new Date(click.created_at).toLocaleString()}</td>
@@ -1410,7 +2097,7 @@
             
             document.getElementById('recentClicksTable').innerHTML = recentHtml;
           } else {
-            statsHtml = '<div class="stat-item"><div class="label">Link not found or expired</div></div>';
+            statsHtml = '<div class="stat-card">Link not found or expired</div>';
             document.getElementById('recentClicksTable').innerHTML = '';
           }
           
@@ -1428,33 +2115,35 @@
           const stats = await res.json();
           
           const modalContent = `
-            <p><strong>ID:</strong> <code>${linkId}</code></p>
-            <p><strong>Target URL:</strong> <a href="${stats.target_url}" target="_blank">${stats.target_url}</a></p>
-            <p><strong>Created:</strong> ${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</p>
-            <p><strong>Expires:</strong> ${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</p>
-            <p><strong>Clicks:</strong> ${stats.clicks || 0}${stats.maxClicks ? '/' + stats.maxClicks : ''}</p>
-            <p><strong>Unique Visitors:</strong> ${stats.uniqueVisitors || 0}</p>
-            <p><strong>Password Protected:</strong> ${stats.passwordProtected ? 'Yes' : 'No'}</p>
-            <p><strong>Notes:</strong> ${stats.notes || 'None'}</p>
+            <div style="margin-bottom: 1.5rem;">
+              <p><strong>ID:</strong> <code>${linkId}</code></p>
+              <p><strong>Target URL:</strong> <a href="${stats.target_url}" target="_blank" style="color: var(--primary-600);">${stats.target_url}</a></p>
+              <p><strong>Created:</strong> ${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</p>
+              <p><strong>Expires:</strong> ${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</p>
+              <p><strong>Clicks:</strong> ${formatNumber(stats.clicks || 0)}${stats.maxClicks ? '/' + formatNumber(stats.maxClicks) : ''}</p>
+              <p><strong>Unique Visitors:</strong> ${formatNumber(stats.uniqueVisitors || 0)}</p>
+              <p><strong>Password Protected:</strong> ${stats.passwordProtected ? 'Yes' : 'No'}</p>
+              ${stats.notes ? `<p><strong>Notes:</strong> ${stats.notes}</p>` : ''}
+            </div>
             
-            <h4 style="margin-top: 1rem;">Country Distribution</h4>
-            <div style="max-height: 200px; overflow-y: auto;">
+            <h4 style="margin-bottom: 1rem;">Country Distribution</h4>
+            <div style="max-height: 200px; overflow-y: auto; margin-bottom: 1.5rem;">
               ${Object.entries(stats.countries || {}).map(([country, count]) => `
-                <div style="display: flex; justify-content: space-between; padding: 0.25rem 0;">
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--neutral-200);">
                   <span>${country}</span>
-                  <span>${count}</span>
+                  <span style="font-weight: 600;">${formatNumber(count)}</span>
                 </div>
               `).join('')}
             </div>
             
-            <div style="margin-top: 1rem; display: flex; gap: 1rem;">
-              <button onclick="copyLink('${linkId}')">
+            <div class="btn-group">
+              <button class="btn btn-sm" onclick="copyLink('${linkId}')">
                 <i class="fas fa-copy"></i> Copy Link
               </button>
-              <button class="secondary" onclick="showQRForUrl('${document.location.origin}/v/${linkId}')">
+              <button class="btn btn-sm btn-secondary" onclick="showQRForUrl('${window.location.origin}/v/${linkId}')">
                 <i class="fas fa-qrcode"></i> Generate QR
               </button>
-              <button class="danger" onclick="deleteLink('${linkId}')">
+              <button class="btn btn-sm btn-danger" onclick="deleteLink('${linkId}')">
                 <i class="fas fa-trash"></i> Delete
               </button>
             </div>
@@ -1469,7 +2158,7 @@
     }
     
     function copyLink(linkId) {
-      const url = document.location.origin + '/v/' + linkId;
+      const url = window.location.origin + '/v/' + linkId;
       navigator.clipboard.writeText(url);
       showAlert('Link copied to clipboard!', 'success');
     }
@@ -1500,6 +2189,18 @@
       }
     }
     
+    // Utility Functions
+    function formatNumber(num) {
+      if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+      if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+      return num.toString();
+    }
+    
+    function setTimeRange(range) {
+      currentTimeRange = range;
+      socket.emit('command', { action: 'getStats' });
+    }
+    
     function refreshLinks() {
       socket.emit('command', { action: 'getLinks' });
     }
@@ -1514,10 +2215,44 @@
       document.getElementById('qrResult').innerHTML = '';
     }
     
-    async function clearCache() {
-      if (!confirm('Are you sure you want to clear all caches? This may temporarily affect performance.')) {
+    function copyToClipboard() {
+      const url = document.getElementById('generatedUrl');
+      url.select();
+      document.execCommand('copy');
+      showAlert('Copied to clipboard!', 'success');
+    }
+    
+    function showQRFromResult() {
+      const url = document.getElementById('generatedUrl').value;
+      const size = document.getElementById('qrSize')?.value || 300;
+      showQRForUrl(url, size);
+    }
+    
+    function downloadQR(url, size) {
+      window.location.href = '/qr/download?url=' + encodeURIComponent(url) + '&size=' + size;
+    }
+    
+    function clearLogs() {
+      document.getElementById('logs').innerHTML = '';
+      showAlert('Logs cleared', 'success');
+    }
+    
+    function exportLogs() {
+      window.location.href = '/admin/export-logs';
+    }
+    
+    function exportData(format) {
+      const linkId = document.getElementById('analyticsLinkId').value;
+      if (!linkId) {
+        showAlert('Please enter a link ID', 'error');
         return;
       }
+      window.location.href = `/api/export/${linkId}?format=${format}`;
+    }
+    
+    // Cache Management
+    async function clearCache() {
+      if (!confirm('Are you sure you want to clear all caches?')) return;
       
       try {
         const res = await fetch('/admin/clear-cache', {
@@ -1532,68 +2267,29 @@
         
         if (res.ok) {
           showAlert('Cache cleared successfully', 'success');
-        } else {
-          showAlert('Failed to clear cache', 'error');
         }
       } catch (err) {
-        showAlert('Network error', 'error');
+        showAlert('Failed to clear cache', 'error');
       }
     }
     
-    async function clearGeoCache() {
+    function clearGeoCache() {
       socket.emit('command', { action: 'clearGeoCache' });
     }
     
-    async function clearQRCache() {
+    function clearQRCache() {
       socket.emit('command', { action: 'clearQRCache' });
     }
     
-    function exportLogs() {
-      window.location.href = '/admin/export-logs';
-    }
-    
-    function exportData(format) {
-      const linkId = document.getElementById('analyticsLinkId').value;
-      if (!linkId) {
-        showAlert('Please enter a link ID', 'error');
-        return;
-      }
+    function saveSettings() {
+      const settings = {
+        linkTTL: parseInt(document.getElementById('settingLinkTTL').value),
+        desktopChallenge: document.getElementById('settingDesktopChallenge').checked,
+        botDetection: document.getElementById('settingBotDetection').checked,
+        analytics: document.getElementById('settingAnalytics').checked
+      };
       
-      window.location.href = `/api/export/${linkId}?format=${format}`;
-    }
-    
-    function copyToClipboard() {
-      const url = document.getElementById('generatedUrl');
-      url.select();
-      document.execCommand('copy');
-      showAlert('Copied to clipboard!', 'success');
-    }
-    
-    function showAlert(message, type) {
-      const alert = document.getElementById('alert');
-      alert.className = 'alert ' + type;
-      alert.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i> ${message}`;
-      alert.style.display = 'block';
-      
-      setTimeout(() => {
-        alert.style.display = 'none';
-      }, 3000);
-    }
-    
-    function showTab(tab) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      
-      document.querySelector(`.tab[onclick="showTab('${tab}')"]`).classList.add('active');
-      document.getElementById(tab).classList.add('active');
-      
-      if (tab === 'links') {
-        refreshLinks();
-      }
-    }
-    
-    function closeModal() {
-      document.getElementById('linkModal').classList.remove('active');
+      showAlert('Settings saved successfully', 'success');
     }
     
     function logout() {
@@ -1605,82 +2301,73 @@
       });
     }
     
-    function saveSettings() {
-      const settings = {
-        linkTTL: parseInt(document.getElementById('settingLinkTTL').value),
-        desktopChallenge: document.getElementById('settingDesktopChallenge').checked,
-        botDetection: document.getElementById('settingBotDetection').checked,
-        analytics: document.getElementById('settingAnalytics').checked
-      };
-      
-      showAlert('Settings saved (some changes may require restart)', 'success');
+    function closeModal() {
+      document.getElementById('linkModal').classList.remove('active');
     }
     
-    // Update system info
-    function updateSystemInfo() {
-      fetch('/health')
-        .then(res => res.json())
-        .then(data => {
-          document.getElementById('nodeVersion').textContent = window.navigator.userAgent.includes('Node') ? 'Embedded' : 'Browser';
-          document.getElementById('platform').textContent = window.navigator.platform;
-          document.getElementById('memoryUsage').textContent = Math.round(data.memory?.rss / 1024 / 1024) || '0';
-        })
-        .catch(() => {});
-    }
-    
-    // Update uptime
-    setInterval(() => {
-      const uptime = Math.floor(process.uptime?.() || 0);
-      const hours = Math.floor(uptime / 3600);
-      const minutes = Math.floor((uptime % 3600) / 60);
-      const seconds = uptime % 60;
-      document.getElementById('uptimeValue').textContent = `${hours}h ${minutes}m ${seconds}s`;
-      document.getElementById('systemUptime').textContent = `${hours}h ${minutes}m ${seconds}s`;
-    }, 1000);
-    
-    // Search and filter listeners
-    document.getElementById('linkSearch').addEventListener('input', () => {
+    // Event Listeners
+    document.getElementById('linkSearch')?.addEventListener('input', () => {
       renderLinksTable(allLinks);
     });
     
-    document.getElementById('linkFilter').addEventListener('change', () => {
+    document.getElementById('linkFilter')?.addEventListener('change', () => {
       renderLinksTable(allLinks);
     });
     
-    // Generate QR checkbox toggle
     document.getElementById('generateQR')?.addEventListener('change', function() {
       document.getElementById('qrSize').disabled = !this.checked;
     });
     
-    // Auto-scroll checkbox
     document.getElementById('autoScroll').addEventListener('change', function() {
       autoScroll = this.checked;
     });
     
-    // Initial data load
-    socket.emit('command', { action: 'getStats' });
-    socket.emit('command', { action: 'getLinks' });
-    updateSystemInfo();
-    
-    // Check if queues tab should be shown
-    if (document.querySelector('#queuesTab').style.display === 'none') {
-      // Check if queues are enabled
-      fetch('/health')
-        .then(res => res.json())
-        .then(data => {
-          if (data.queues?.redirect === 'ready') {
-            document.querySelector('#queuesTab').style.display = 'flex';
-          }
-        });
-    }
-    
-    // Close modal on outside click
+    // Click outside to close modal
     window.onclick = function(event) {
       const modal = document.getElementById('linkModal');
       if (event.target === modal) {
         closeModal();
       }
-    }
+    };
+    
+    // Handle escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeModal();
+      }
+    });
+    
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      if (window.innerWidth > 768) {
+        document.getElementById('sidebar').classList.remove('open');
+      }
+    });
+    
+    // Uptime counter
+    let startTime = Date.now();
+    setInterval(() => {
+      const uptime = Math.floor((Date.now() - startTime) / 1000);
+      const hours = Math.floor(uptime / 3600);
+      const minutes = Math.floor((uptime % 3600) / 60);
+      document.getElementById('uptimeValue').textContent = `${hours}h ${minutes}m`;
+      document.getElementById('systemUptime').textContent = `${hours}h ${minutes}m`;
+      
+      // Update memory (mock for demo)
+      document.getElementById('memoryUsage').textContent = Math.floor(Math.random() * 200 + 100) + ' MB';
+    }, 1000);
+    
+    // Check for queues
+    fetch('/health')
+      .then(res => res.json())
+      .then(data => {
+        if (data.queues?.redirect === 'ready') {
+          document.getElementById('queuesNavItem').style.display = 'flex';
+        }
+      });
+    
+    // Initialize
+    initSocket();
   </script>
 </body>
 </html>
