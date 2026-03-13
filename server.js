@@ -1986,15 +1986,29 @@ app.get('/admin/login', (req, res) => {
     const csrfToken = crypto.randomBytes(32).toString('hex');
     req.session.csrfToken = csrfToken;
     
+    // Generate nonce for CSP
+    const nonce = crypto.randomBytes(16).toString('hex');
+    
     try {
       // Read the login.html file
       const loginHtmlPath = path.join(__dirname, 'public', 'login.html');
       let html = await fs.readFile(loginHtmlPath, 'utf8');
       
-      // Inject the CSRF token
-      html = html.replace(
-        '<input type="hidden" id="csrfToken" value="">',
-        `<input type="hidden" id="csrfToken" value="${csrfToken}">`
+      // Inject the CSRF token and nonce
+      html = html
+        .replace(
+          '<input type="hidden" id="csrfToken" value="">',
+          `<input type="hidden" id="csrfToken" value="${csrfToken}">`
+        )
+        .replace(
+          '{{NONCE}}',
+          nonce
+        );
+      
+      // Set CSP with nonce for this response
+      res.setHeader(
+        'Content-Security-Policy',
+        `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss:;`
       );
       
       res.send(html);
@@ -2131,7 +2145,7 @@ app.get('/admin', async (req, res, next) => {
     };
     
     for (const [key, value] of Object.entries(replacements)) {
-      html = html.replace(new RegExp(key, 'g'), value);
+      html = html.replace(new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value);
     }
     
     // Generate nonce for CSP
@@ -2144,9 +2158,9 @@ app.get('/admin', async (req, res, next) => {
       `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com https://fonts.gstatic.com; font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss:;`
     );
     
-    // Inject nonce into script tags that need it
+    // Inject nonce into script tag
     html = html.replace(
-      '<script>',
+      '<script nonce="{{NONCE}}">',
       `<script nonce="${nonce}">`
     );
     
