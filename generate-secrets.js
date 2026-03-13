@@ -53,7 +53,7 @@ function log(color, message) {
 
 function showHelp() {
   console.log(`
-${colors.bright}🔐 GENERATE SECRETS SCRIPT v2.0 - Enterprise Edition${colors.reset}
+${colors.bright}🔐 GENERATE SECRETS SCRIPT v2.1 - Enterprise Edition${colors.reset}
 
 ${colors.bright}Usage:${colors.reset}
   node generate-secrets.js [options] [password]
@@ -93,6 +93,7 @@ ${colors.bright}Output:${colors.reset}
   - ENCRYPTION_KEY: AES-256 encryption key
   - API_KEY: Random API key
   - WEBHOOK_SECRET: Webhook signing secret
+  - CSRF_SECRET: CSRF protection secret
   - DATABASE_URL: PostgreSQL connection string
   - REDIS_URL: Redis connection string
   `);
@@ -121,6 +122,11 @@ function generateAPIKey() {
 
 function generateWebhookSecret() {
   return 'whsec_' + crypto.randomBytes(32).toString('hex');
+}
+
+// NEW: Generate CSRF secret
+function generateCSRFSecret() {
+  return crypto.randomBytes(32).toString('hex');
 }
 
 function generateRedisPassword() {
@@ -264,7 +270,9 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
       'ADMIN_USERNAME',
       'JWT_SECRET',
       'ENCRYPTION_KEY',
-      'API_KEY'
+      'API_KEY',
+      'WEBHOOK_SECRET',
+      'CSRF_SECRET'  // ADDED: CSRF secret
     ],
     'SERVER CONFIGURATION': [
       'PORT',
@@ -346,7 +354,6 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
       'QUEUE_REDIS_URL'
     ],
     'WEBHOOKS': [
-      'WEBHOOK_SECRET',
       'WEBHOOK_URL',
       'WEBHOOK_EVENTS'
     ],
@@ -429,6 +436,8 @@ ADMIN_USERNAME=admin
 JWT_SECRET=your-jwt-secret-here
 ENCRYPTION_KEY=your-encryption-key-here
 API_KEY=rp_your-api-key-here
+WEBHOOK_SECRET=whsec_your-webhook-secret
+CSRF_SECRET=your-32-byte-hex-csrf-secret-here
 
 # ─── SERVER CONFIGURATION ─────────────────────────────────────────────────
 PORT=10000
@@ -510,9 +519,12 @@ QUEUE_CONCURRENCY=5
 QUEUE_REDIS_URL=redis://localhost:6379
 
 # ─── WEBHOOKS ─────────────────────────────────────────────────────────────
-WEBHOOK_SECRET=whsec_your-webhook-secret
 WEBHOOK_URL=https://api.example.com/webhook
 WEBHOOK_EVENTS=link.created,link.clicked,bot.detected
+
+# ─── 2FA/MFA ──────────────────────────────────────────────────────────────
+MFA_ENABLED=false
+BACKUP_CODES=xxxx-xxxx-xxxx-xxxx,xxxx-xxxx-xxxx-xxxx
 
 # ─── GENERATE SECURE VALUES ───────────────────────────────────────────────
 # Run: node generate-secrets.js --write --all
@@ -750,7 +762,7 @@ async function main() {
   let password = args.find(arg => !arg.startsWith('--') && arg !== password);
   
   console.log('\n' + '='.repeat(70));
-  log('bright', '🔐 REDIRECTOR PRO - ENTERPRISE SECRETS GENERATOR v2.0');
+  log('bright', '🔐 REDIRECTOR PRO - ENTERPRISE SECRETS GENERATOR v2.1');
   console.log('='.repeat(70) + '\n');
 
   // Generate all secrets
@@ -763,6 +775,7 @@ async function main() {
     encryptionKey: generateEncryptionKey(),
     apiKey: generateAPIKey(),
     webhookSecret: generateWebhookSecret(),
+    csrfSecret: generateCSRFSecret(), // NEW: CSRF secret
     salt: generateSalt(),
     otpSecret: generateOTPSecret()
   };
@@ -790,6 +803,7 @@ async function main() {
   console.log(colors.bright + 'ENCRYPTION_KEY=' + colors.reset + secrets.encryptionKey);
   console.log(colors.bright + 'API_KEY=' + colors.reset + secrets.apiKey);
   console.log(colors.bright + 'WEBHOOK_SECRET=' + colors.reset + secrets.webhookSecret);
+  console.log(colors.bright + 'CSRF_SECRET=' + colors.reset + secrets.csrfSecret); // NEW: Display CSRF secret
   console.log(colors.bright + 'ADMIN_PASSWORD_HASH=' + colors.reset + passwordHash);
   console.log(colors.dim + '(Password: ' + password + ')' + colors.reset);
   
@@ -811,6 +825,7 @@ async function main() {
   env.ENCRYPTION_KEY = secrets.encryptionKey;
   env.API_KEY = secrets.apiKey;
   env.WEBHOOK_SECRET = secrets.webhookSecret;
+  env.CSRF_SECRET = secrets.csrfSecret; // NEW: Add CSRF secret to env
   env.OTP_SECRET = secrets.otpSecret;
   
   // Set defaults
@@ -851,6 +866,7 @@ async function main() {
       'encryption_key': secrets.encryptionKey,
       'api_key': secrets.apiKey,
       'webhook_secret': secrets.webhookSecret,
+      'csrf_secret': secrets.csrfSecret, // NEW: Docker secret for CSRF
       'redis_password': env.REDIS_PASSWORD || '',
       'db_password': env.DB_PASSWORD || ''
     }).forEach(([name, value]) => {
