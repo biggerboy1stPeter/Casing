@@ -1700,7 +1700,7 @@ app.post('/v/:id/verify', express.json(), async (req, res, next) => {
   }
 });
 
-// ENHANCED: Verification Gate with Password Protection
+// ENHANCED: Verification Gate with Password Protection - Dark Theme
 app.get('/v/:id', strictLimiter, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -1809,7 +1809,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
         <head>
           <title>Embedded Content - Redirector Pro</title>
           <style>
-            body{margin:0;padding:0;overflow:hidden}
+            body{margin:0;padding:0;overflow:hidden;background:#000}
             iframe{width:100vw;height:100vh;border:none}
           </style>
         </head>
@@ -1820,7 +1820,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       `);
     }
 
-    // ENHANCED: Password Protected Link UI
+    // ENHANCED: Password Protected Link UI with Dark Theme
     if (data.passwordHash) {
       const nonce = res.locals.nonce;
       const error = req.query.error === 'true' ? 'Invalid password' : '';
@@ -1831,7 +1831,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
         <head>
           <title>Password Protected - Redirector Pro</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+          <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
           <style>
             * {
               margin: 0;
@@ -1840,113 +1840,112 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
             }
             
             body {
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
               min-height: 100vh;
+              background: #000;
+              color: #ddd;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
               display: flex;
               align-items: center;
               justify-content: center;
               padding: 20px;
             }
             
-            .container {
+            .login-wrapper {
               width: 100%;
-              max-width: 420px;
-              animation: slideUp 0.5s ease;
+              max-width: 1000px;
+              background: #0a0a0a;
+              border-radius: 28px;
+              overflow: hidden;
+              box-shadow: 0 40px 100px rgba(0,0,0,0.9), inset 0 0 80px rgba(20,20,20,0.6);
+              display: flex;
+              border: 1px solid #111;
+              animation: fadeIn 0.6s ease-out;
             }
             
-            @keyframes slideUp {
-              from {
-                opacity: 0;
-                transform: translateY(20px);
-              }
-              to {
-                opacity: 1;
-                transform: translateY(0);
-              }
+            @keyframes fadeIn {
+              from { opacity: 0; transform: scale(0.95); }
+              to { opacity: 1; transform: scale(1); }
             }
             
-            .card {
-              background: white;
-              border-radius: 24px;
-              padding: 2.5rem 2rem;
-              box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
-              position: relative;
+            .image-side {
+              flex: 1.3;
+              background: #000;
               overflow: hidden;
             }
             
-            .card::before {
-              content: '';
-              position: absolute;
-              top: 0;
-              left: 0;
-              right: 0;
-              height: 4px;
-              background: linear-gradient(90deg, #667eea, #764ba2);
+            .image-side img {
+              width: 100%;
+              height: 100%;
+              object-fit: cover;
+              object-position: center;
+              opacity: 0.88;
+              filter: contrast(1.15) brightness(0.92);
             }
             
-            .logo {
-              text-align: center;
-              margin-bottom: 2rem;
-            }
-            
-            .logo-icon {
-              width: 72px;
-              height: 72px;
-              background: linear-gradient(135deg, #667eea, #764ba2);
-              border-radius: 50%;
+            .form-side {
+              flex: 1;
+              padding: 3rem;
               display: flex;
-              align-items: center;
+              flex-direction: column;
               justify-content: center;
-              margin: 0 auto 1.5rem;
-              color: white;
-              font-size: 2rem;
-              box-shadow: 0 10px 20px -5px rgba(102,126,234,0.5);
+              background: linear-gradient(135deg, rgba(15,15,15,0.92), rgba(8,8,8,0.95));
+              backdrop-filter: blur(10px);
+              -webkit-backdrop-filter: blur(10px);
+            }
+            
+            .dots {
+              font-size: 2.2rem;
+              letter-spacing: 8px;
+              opacity: 0.3;
+              margin-bottom: 2rem;
+              user-select: none;
+              color: #888;
             }
             
             h1 {
-              font-size: 1.75rem;
-              color: #1a1a1a;
+              font-size: 2.5rem;
+              font-weight: 400;
+              letter-spacing: -1px;
               margin-bottom: 0.5rem;
-              font-weight: 600;
+              background: linear-gradient(90deg, #e0e0e0, #b0b0b0);
+              -webkit-background-clip: text;
+              -webkit-text-fill-color: transparent;
             }
             
             .subtitle {
-              color: #666;
-              font-size: 0.95rem;
+              font-size: 1rem;
+              color: #888;
+              margin-bottom: 2rem;
+              font-weight: 300;
             }
             
             .info-box {
-              background: #f0f9ff;
-              border: 1px solid #bae6fd;
-              border-radius: 12px;
+              background: rgba(0, 100, 200, 0.2);
+              border-left: 4px solid #3b82f6;
               padding: 1rem;
-              margin: 1.5rem 0;
-              display: flex;
-              align-items: center;
-              gap: 0.75rem;
-              color: #0369a1;
+              border-radius: 12px;
+              margin-bottom: 1.5rem;
+              font-size: 0.9rem;
+              color: #9ac7ff;
+              border: 1px solid rgba(59, 130, 246, 0.2);
             }
             
             .info-box i {
-              font-size: 1.25rem;
-            }
-            
-            .info-box span {
-              font-size: 0.9rem;
-              line-height: 1.4;
+              margin-right: 0.5rem;
+              color: #3b82f6;
             }
             
             .alert {
-              background: #fef2f2;
-              border: 1px solid #fecaca;
-              color: #b91c1c;
+              background: rgba(239, 68, 68, 0.1);
+              border-left: 4px solid #ef4444;
+              color: #fecaca;
               padding: 1rem;
               border-radius: 12px;
               margin-bottom: 1.5rem;
               display: ${error ? 'flex' : 'none'};
               align-items: center;
               gap: 0.75rem;
+              border: 1px solid rgba(239, 68, 68, 0.2);
               animation: shake 0.5s ease;
             }
             
@@ -1956,20 +1955,17 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
               20%, 40%, 60%, 80% { transform: translateX(5px); }
             }
             
-            .alert i {
-              font-size: 1.25rem;
-            }
-            
             .form-group {
               margin-bottom: 1.5rem;
             }
             
             label {
+              font-size: 0.92rem;
+              color: #aaa;
+              margin-bottom: 0.4rem;
               display: block;
-              margin-bottom: 0.5rem;
-              color: #4a5568;
-              font-weight: 500;
-              font-size: 0.95rem;
+              font-weight: 400;
+              letter-spacing: 0.3px;
             }
             
             .input-wrapper {
@@ -1978,72 +1974,84 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
             
             .input-icon {
               position: absolute;
-              left: 16px;
+              left: 1rem;
               top: 50%;
               transform: translateY(-50%);
-              color: #9ca3af;
+              color: #666;
               font-size: 1.1rem;
               transition: color 0.2s;
+              z-index: 1;
             }
             
             input {
               width: 100%;
               padding: 1rem 1rem 1rem 3rem;
-              border: 2px solid #e5e7eb;
-              border-radius: 14px;
+              background: rgba(20,20,20,0.7);
+              border: 1px solid #222;
+              border-radius: 12px;
+              color: #eee;
               font-size: 1rem;
-              transition: all 0.2s;
-              background: #f9fafb;
+              transition: all 0.22s;
+              backdrop-filter: blur(4px);
+            }
+            
+            input:hover {
+              border-color: #333;
             }
             
             input:focus {
               outline: none;
-              border-color: #667eea;
-              background: white;
-              box-shadow: 0 0 0 4px rgba(102,126,234,0.1);
+              border-color: #555;
+              background: rgba(30,30,30,0.8);
+              box-shadow: 0 0 0 3px rgba(80,80,80,0.2);
             }
             
             input:focus + .input-icon {
-              color: #667eea;
+              color: #888;
+            }
+            
+            input::placeholder {
+              color: #444;
             }
             
             .password-toggle {
               position: absolute;
-              right: 16px;
+              right: 1rem;
               top: 50%;
               transform: translateY(-50%);
               background: none;
               border: none;
-              color: #9ca3af;
+              color: #666;
+              font-size: 1.2rem;
               cursor: pointer;
-              font-size: 1.1rem;
-              padding: 4px;
-              border-radius: 8px;
-              transition: all 0.2s;
+              padding: 0.4rem;
+              transition: color 0.2s;
+              z-index: 2;
             }
             
             .password-toggle:hover {
-              color: #667eea;
-              background: #f3f4f6;
+              color: #aaa;
             }
             
             button {
               width: 100%;
               padding: 1rem;
-              background: linear-gradient(135deg, #667eea, #764ba2);
+              background: linear-gradient(90deg, #5a5a5a 0%, #8c8c8c 50%, #5a5a5a 100%);
               color: white;
+              font-size: 1rem;
+              font-weight: 500;
               border: none;
               border-radius: 14px;
-              font-size: 1rem;
-              font-weight: 600;
               cursor: pointer;
-              transition: all 0.2s;
+              transition: all 0.3s;
+              box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+              background-size: 200% 100%;
+              position: relative;
+              overflow: hidden;
               display: flex;
               align-items: center;
               justify-content: center;
-              gap: 10px;
-              position: relative;
-              overflow: hidden;
+              gap: 0.5rem;
             }
             
             button::before {
@@ -2065,45 +2073,37 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
             }
             
             button:hover {
+              background-position: 100% 0;
               transform: translateY(-2px);
-              box-shadow: 0 10px 25px -5px #667eea;
+              box-shadow: 0 12px 35px rgba(100,100,100,0.3);
             }
             
             button:disabled {
-              opacity: 0.7;
-              transform: none;
+              opacity: 0.5;
               cursor: not-allowed;
+              transform: none;
             }
             
             .loading {
               display: none;
               text-align: center;
               margin-top: 1.5rem;
-              color: #667eea;
+              color: #888;
             }
             
             .loading i {
-              animation: spin 1s linear infinite;
+              animation: spin 0.8s linear infinite;
             }
             
             @keyframes spin {
-              from { transform: rotate(0deg); }
               to { transform: rotate(360deg); }
             }
             
             .footer {
               text-align: center;
               margin-top: 2rem;
-              color: #9ca3af;
+              color: #555;
               font-size: 0.85rem;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              gap: 8px;
-            }
-            
-            .footer i {
-              color: #667eea;
             }
             
             .security-badge {
@@ -2111,31 +2111,60 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
               justify-content: center;
               gap: 1rem;
               margin-top: 1.5rem;
-              font-size: 0.8rem;
-              color: #9ca3af;
-            }
-            
-            .security-badge span {
-              display: flex;
-              align-items: center;
-              gap: 4px;
+              font-size: 0.75rem;
+              color: #666;
             }
             
             .security-badge i {
-              color: #10b981;
+              color: #4ade80;
+            }
+            
+            @media (max-width: 768px) {
+              .login-wrapper {
+                flex-direction: column;
+                max-width: 450px;
+              }
+              
+              .image-side {
+                height: 200px;
+                flex: none;
+              }
+              
+              .form-side {
+                padding: 2rem;
+              }
+              
+              h1 {
+                font-size: 2rem;
+              }
+            }
+            
+            @media (max-width: 480px) {
+              .image-side {
+                height: 150px;
+              }
+              
+              .form-side {
+                padding: 1.5rem;
+              }
+              
+              h1 {
+                font-size: 1.8rem;
+              }
             }
           </style>
         </head>
         <body>
-          <div class="container">
-            <div class="card">
-              <div class="logo">
-                <div class="logo-icon">
-                  <i class="fas fa-lock"></i>
-                </div>
-                <h1>Protected Link</h1>
-                <div class="subtitle">This link requires a password</div>
-              </div>
+          <div class="login-wrapper">
+            <div class="image-side">
+              <img src="https://img.freepik.com/free-photo/3d-rendering-abstract-black-white-background_23-2150914061.jpg" alt="Abstract black chrome background">
+            </div>
+            
+            <div class="form-side">
+              <div class="dots">•••</div>
+              
+              <h1>Protected Link</h1>
+              <p class="subtitle">This link requires a password</p>
               
               <div class="info-box">
                 <i class="fas fa-info-circle"></i>
@@ -2160,14 +2189,14 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
                       required
                     >
                     <button type="button" class="password-toggle" id="togglePassword" tabindex="-1">
-                      <i class="far fa-eye"></i>
+                      <i class="fa-regular fa-eye"></i>
                     </button>
                   </div>
                 </div>
                 
                 <button type="submit" id="submitBtn">
+                  <span>Access Link</span>
                   <i class="fas fa-arrow-right"></i>
-                  Access Link
                 </button>
                 
                 <div class="loading" id="loading">
@@ -2176,14 +2205,13 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
               </form>
               
               <div class="security-badge">
-                <span><i class="fas fa-shield-alt"></i> 256-bit SSL</span>
-                <span><i class="fas fa-clock"></i> Encrypted</span>
-                <span><i class="fas fa-lock"></i> Secure</span>
+                <span><i class="fas fa-lock"></i> 256-bit SSL</span>
+                <span><i class="fas fa-shield"></i> Encrypted</span>
+                <span><i class="fas fa-clock"></i> Secure</span>
               </div>
               
               <div class="footer">
-                <i class="fas fa-shield-halved"></i>
-                Redirector Pro • Secure Link Protection
+                <i class="fas fa-shield-halved"></i> Redirector Pro • Secure Link Protection
               </div>
             </div>
           </div>
@@ -2197,11 +2225,10 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
             const errorMessage = document.getElementById('errorMessage');
             const togglePassword = document.getElementById('togglePassword');
             
-            // Toggle password visibility
             togglePassword.addEventListener('click', () => {
               const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
               passwordInput.setAttribute('type', type);
-              togglePassword.querySelector('i').className = type === 'password' ? 'far fa-eye' : 'far fa-eye-slash';
+              togglePassword.querySelector('i').className = type === 'password' ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
             });
             
             form.addEventListener('submit', async (e) => {
@@ -2214,7 +2241,6 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
                 return;
               }
               
-              // Disable form
               submitBtn.disabled = true;
               loading.style.display = 'block';
               errorAlert.style.display = 'none';
@@ -2222,28 +2248,16 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
               try {
                 const response = await fetch('/v/${linkId}/verify', {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json'
-                  },
+                  headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ password })
                 });
                 
                 const data = await response.json();
                 
                 if (response.ok && data.success) {
-                  // Successful verification
-                  if (data.redirect) {
-                    // No password needed, redirect immediately
-                    window.location.href = data.target;
-                  } else {
-                    // Password verified, redirect
-                    window.location.href = data.target;
-                  }
+                  window.location.href = data.redirect ? data.target : data.target;
                 } else {
-                  // Show error
                   showError(data.error || 'Invalid password');
-                  
-                  // Re-enable form
                   submitBtn.disabled = false;
                   loading.style.display = 'none';
                   passwordInput.value = '';
@@ -2265,14 +2279,12 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
               }, 3000);
             }
             
-            // Handle Enter key
             passwordInput.addEventListener('keypress', (e) => {
               if (e.key === 'Enter' && !submitBtn.disabled) {
                 form.dispatchEvent(new Event('submit'));
               }
             });
             
-            // Clear error on input
             passwordInput.addEventListener('input', () => {
               errorAlert.style.display = 'none';
             });
@@ -2282,7 +2294,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       `);
     }
 
-    // Handle QR code display
+    // Handle QR code display - Dark Theme
     if (showQr) {
       const qrData = await QRCode.toDataURL(data.target);
       return res.send(`
@@ -2293,12 +2305,48 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <meta http-equiv="refresh" content="5;url=${data.target}">
           <style>
-            body{font-family:sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
-            .card{background:white;padding:2rem;border-radius:16px;text-align:center;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3)}
-            h2{color:#333;margin-bottom:1rem}
-            img{max-width:100%;height:auto;border-radius:8px;margin:1rem 0;border:1px solid #e0e0e0}
-            p{color:#666;margin:0.5rem 0}
-            .countdown{color:#667eea;font-weight:bold;margin-top:1rem}
+            body {
+              min-height: 100vh;
+              background: #000;
+              color: #ddd;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              margin: 0;
+              padding: 20px;
+            }
+            .card {
+              background: #0a0a0a;
+              padding: 2rem;
+              border-radius: 24px;
+              text-align: center;
+              max-width: 400px;
+              border: 1px solid #1a1a1a;
+              box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+            }
+            h2 {
+              font-size: 1.5rem;
+              margin-bottom: 1rem;
+              color: #e0e0e0;
+              font-weight: 400;
+            }
+            img {
+              max-width: 100%;
+              height: auto;
+              border-radius: 16px;
+              margin: 1rem 0;
+              border: 1px solid #2a2a2a;
+            }
+            p {
+              color: #888;
+              margin: 0.5rem 0;
+            }
+            .countdown {
+              color: #4ade80;
+              font-weight: bold;
+              margin-top: 1rem;
+            }
           </style>
         </head>
         <body>
@@ -2329,7 +2377,12 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       stats.successfulRedirects++;
       return res.send(`<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=${data.target}"></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="refresh" content="0;url=${data.target}">
+  <style>body{background:#000;margin:0;padding:0}</style>
+</head>
 <body></body>
 </html>`);
     }
@@ -2385,7 +2438,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
   <style nonce="${nonce}">
     *{margin:0;padding:0}
     body{background:#0a0a0a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
-    .spinner{width:40px;height:40px;border:3px solid #333;border-top-color:#0f0;border-radius:50%;margin:20px auto;animation:spin 1s linear infinite}
+    .spinner{width:40px;height:40px;border:3px solid #2a2a2a;border-top-color:#8a8a8a;border-radius:50%;margin:20px auto;animation:spin 1s linear infinite}
     @keyframes spin{to{transform:rotate(360deg)}}
     .hidden{position:absolute;width:1px;height:1px;overflow:hidden}
     .message{text-align:center}
@@ -2406,30 +2459,30 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
   }
 });
 
-// Expired Link Page
+// Expired Link Page - Dark Theme
 app.get('/expired', (req, res) => {
   const originalTarget = req.query.target || BOT_URLS[0];
   const nonce = res.locals.nonce;
   const isMobile = req.deviceInfo.isMobile;
   
   const styles = isMobile ? `
-    body{font-family:sans-serif;background:#667eea;padding:10px;margin:0;min-height:100vh;display:flex;align-items:center}
-    .card{background:white;padding:20px;border-radius:12px;text-align:center;max-width:400px;margin:0 auto;box-shadow:0 10px 30px rgba(0,0,0,0.2)}
-    h1{font-size:1.5rem;margin:0 0 10px;color:#333}
-    p{color:#666;margin-bottom:20px}
-    .btn{background:#667eea;color:white;padding:12px 24px;border-radius:25px;text-decoration:none;display:inline-block;font-weight:600;transition:transform 0.2s}
+    body{background:#000;color:#ddd;font-family:-apple-system,sans-serif;padding:10px;margin:0;min-height:100vh;display:flex;align-items:center}
+    .card{background:#0a0a0a;padding:20px;border-radius:24px;text-align:center;max-width:400px;margin:0 auto;border:1px solid #1a1a1a}
+    h1{font-size:1.5rem;margin:0 0 10px;color:#e0e0e0;font-weight:400}
+    p{color:#888;margin-bottom:20px}
+    .btn{background:linear-gradient(90deg,#5a5a5a 0%,#8c8c8c 50%,#5a5a5a 100%);color:white;padding:12px 24px;border-radius:25px;text-decoration:none;display:inline-block;font-weight:500;transition:transform 0.2s}
     .btn:hover{transform:translateY(-2px)}
-    .icon{font-size:3rem;margin-bottom:10px;display:block}
+    .icon{font-size:3rem;margin-bottom:10px;display:block;color:#666}
   ` : `
     *{box-sizing:border-box}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
-    .card{background:rgba(255,255,255,0.95);backdrop-filter:blur(10px);padding:2.5rem;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.3);text-align:center;max-width:480px;animation:fadeIn 0.5s ease}
+    body{background:#000;color:#ddd;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
+    .card{background:#0a0a0a;border-radius:28px;padding:2.5rem;text-align:center;max-width:480px;border:1px solid #1a1a1a;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);animation:fadeIn 0.5s ease}
     @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-    h1{font-size:2rem;margin-bottom:1rem;color:#333}
-    p{color:#666;margin-bottom:2rem;font-size:1.1rem}
-    .btn{background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:#fff;padding:1rem 2rem;border-radius:50px;font-weight:600;text-decoration:none;display:inline-block;transition:transform 0.2s, box-shadow 0.2s}
-    .btn:hover{transform:translateY(-2px);box-shadow:0 10px 20px rgba(102,126,234,0.4)}
-    .icon{font-size:4rem;margin-bottom:1rem;display:block}
+    h1{font-size:2rem;margin-bottom:1rem;color:#e0e0e0;font-weight:400}
+    p{color:#888;margin-bottom:2rem;font-size:1.1rem}
+    .btn{background:linear-gradient(90deg,#5a5a5a 0%,#8c8c8c 50%,#5a5a5a 100%);color:white;padding:1rem 2rem;border-radius:50px;font-weight:500;text-decoration:none;display:inline-block;transition:transform 0.2s, box-shadow 0.2s}
+    .btn:hover{transform:translateY(-2px);box-shadow:0 10px 20px rgba(100,100,100,0.3)}
+    .icon{font-size:4rem;margin-bottom:1rem;display:block;color:#666}
   `;
 
   res.send(`<!DOCTYPE html>
