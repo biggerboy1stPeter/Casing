@@ -124,7 +124,6 @@ function generateWebhookSecret() {
   return 'whsec_' + crypto.randomBytes(32).toString('hex');
 }
 
-// NEW: Generate CSRF secret
 function generateCSRFSecret() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -142,7 +141,6 @@ function generatePasswordHash(password, rounds = 12) {
 }
 
 function generateOTPSecret() {
-  // Generate a random 20-byte secret and return as hex
   return crypto.randomBytes(20).toString('hex');
 }
 
@@ -184,14 +182,12 @@ function readEnvFile(filePath = ENV_FILE) {
   const env = {};
   
   content.split('\n').forEach(line => {
-    // Skip comments and empty lines
     if (line.startsWith('#') || !line.trim()) return;
     
     const match = line.match(/^([^=]+)=(.*)$/);
     if (match) {
       const key = match[1].trim();
       let value = match[2].trim();
-      // Remove quotes if present
       value = value.replace(/^["']|["']$/g, '');
       env[key] = value;
     }
@@ -228,32 +224,26 @@ function validateEnvFile(env) {
     }
   });
   
-  // Validate SESSION_SECRET length
   if (env.SESSION_SECRET && env.SESSION_SECRET.length < 32) {
     warnings.push('SESSION_SECRET should be at least 32 characters');
   }
   
-  // Validate METRICS_API_KEY length
   if (env.METRICS_API_KEY && env.METRICS_API_KEY.length < 16) {
     warnings.push('METRICS_API_KEY should be at least 16 characters');
   }
   
-  // Validate PORT
   if (env.PORT && (isNaN(parseInt(env.PORT)) || parseInt(env.PORT) < 1 || parseInt(env.PORT) > 65535)) {
     errors.push('PORT must be a valid port number (1-65535)');
   }
   
-  // Validate NODE_ENV
   if (env.NODE_ENV && !['development', 'production', 'test'].includes(env.NODE_ENV)) {
     warnings.push('NODE_ENV should be development, production, or test');
   }
   
-  // Validate URLs
   if (env.TARGET_URL && !env.TARGET_URL.match(/^https?:\/\/.+/)) {
     warnings.push('TARGET_URL should be a valid URL');
   }
   
-  // Validate LINK_TTL format
   if (env.LINK_TTL && !env.LINK_TTL.match(/^\d+[smhd]?$/)) {
     warnings.push('LINK_TTL should be in format: 30m, 1h, 7d, etc.');
   }
@@ -272,7 +262,7 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
       'ENCRYPTION_KEY',
       'API_KEY',
       'WEBHOOK_SECRET',
-      'CSRF_SECRET'  // ADDED: CSRF secret
+      'CSRF_SECRET'
     ],
     'SERVER CONFIGURATION': [
       'PORT',
@@ -386,7 +376,6 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
     }
   });
 
-  // Add any remaining variables not in sections
   const allKeys = Object.keys(env);
   const usedKeys = Object.values(sections).flat();
   const extraKeys = allKeys.filter(key => !usedKeys.includes(key));
@@ -398,7 +387,6 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
     });
   }
 
-  // Check if file exists and handle force flag
   if (fs.existsSync(filePath) && !force) {
     log('yellow', `⚠️  ${filePath} already exists. Use --force to overwrite.`);
     const backup = backupEnvFile();
@@ -407,7 +395,6 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
     }
   }
   
-  // Create directory if it doesn't exist
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -416,7 +403,6 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
   fs.writeFileSync(filePath, content);
   log('green', `✅ Secrets written to ${filePath}`);
   
-  // Set secure permissions
   fs.chmodSync(filePath, 0o600);
 }
 
@@ -534,7 +520,6 @@ BACKUP_CODES=xxxx-xxxx-xxxx-xxxx,xxxx-xxxx-xxxx-xxxx
   fs.writeFileSync(ENV_EXAMPLE_FILE, example);
   log('green', `✅ Created ${ENV_EXAMPLE_FILE}`);
   
-  // Create environment-specific examples
   const examples = {
     [ENV_DEV_FILE]: '# Development environment\nNODE_ENV=development\nDEBUG=true',
     [ENV_PROD_FILE]: '# Production environment\nNODE_ENV=production\nDEBUG=false',
@@ -599,7 +584,6 @@ async function promptForVar(varName, defaultValue = '', description = '') {
   });
 }
 
-// FIXED: Redis URL generation with proper encoding
 async function promptForRedis() {
   log('cyan', '\n📀 Configuring Redis (optional)...');
   const env = {};
@@ -614,10 +598,10 @@ async function promptForRedis() {
     env.REDIS_PASSWORD = generateRedisPassword();
     log('green', `✅ Generated Redis password: ${env.REDIS_PASSWORD}`);
     
-    // FIXED: URL-encode the password and use correct format (without 'default:')
+    // FIXED: Properly encode password for Redis URL
     const encodedPassword = encodeURIComponent(env.REDIS_PASSWORD);
     env.REDIS_URL = `redis://:${encodedPassword}@${env.REDIS_HOST}:${env.REDIS_PORT}/${env.REDIS_DB}`;
-    log('green', `✅ Redis URL generated with encoded password`);
+    log('green', `✅ Redis URL generated: ${env.REDIS_URL.replace(/:([^@]+)@/, ':****@')}`);
   } else {
     env.REDIS_URL = `redis://${env.REDIS_HOST}:${env.REDIS_PORT}/${env.REDIS_DB}`;
   }
@@ -641,9 +625,10 @@ async function promptForPostgres() {
   env.DB_POOL_MAX = await promptForVar('DB_POOL_MAX', '10');
   env.DB_IDLE_TIMEOUT = await promptForVar('DB_IDLE_TIMEOUT', '30000');
   
-  // URL-encode the password for DATABASE_URL
+  // FIXED: Properly encode password for PostgreSQL URL
   const encodedPassword = encodeURIComponent(env.DB_PASSWORD);
   env.DATABASE_URL = `postgresql://${env.DB_USER}:${encodedPassword}@${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}`;
+  log('green', `✅ PostgreSQL URL generated: ${env.DATABASE_URL.replace(/:([^@]+)@/, ':****@')}`);
   
   return env;
 }
@@ -658,7 +643,6 @@ function exportSecrets(filePath) {
     secrets: {}
   };
   
-  // Mask sensitive values for export
   Object.entries(env).forEach(([key, value]) => {
     if (key.includes('PASSWORD') || key.includes('SECRET') || key.includes('KEY')) {
       secrets.secrets[key] = {
@@ -701,18 +685,15 @@ function importSecrets(filePath) {
 async function main() {
   const args = process.argv.slice(2);
   
-  // Check for help flag
   if (args.includes('--help')) {
     showHelp();
   }
   
-  // Check for example flag
   if (args.includes('--example')) {
     createEnvExample();
     process.exit(0);
   }
   
-  // Check for validate flag
   if (args.includes('--validate')) {
     const env = readEnvFile();
     const { errors, warnings } = validateEnvFile(env);
@@ -730,14 +711,12 @@ async function main() {
     process.exit(0);
   }
   
-  // Check for export flag
   const exportIndex = args.indexOf('--export');
   if (exportIndex !== -1 && args[exportIndex + 1]) {
     exportSecrets(args[exportIndex + 1]);
     process.exit(0);
   }
   
-  // Check for import flag
   const importIndex = args.indexOf('--import');
   if (importIndex !== -1 && args[importIndex + 1]) {
     importSecrets(args[importIndex + 1]);
@@ -753,19 +732,16 @@ async function main() {
   const encryptSecrets = args.includes('--encrypt');
   const rotateSecrets = args.includes('--rotate');
   
-  // Backup if rotating
   if (rotateSecrets && fs.existsSync(ENV_FILE)) {
     backupEnvFile();
   }
   
-  // Get password from command line or prompt
   let password = args.find(arg => !arg.startsWith('--') && arg !== password);
   
   console.log('\n' + '='.repeat(70));
   log('bright', '🔐 REDIRECTOR PRO - ENTERPRISE SECRETS GENERATOR v2.1');
   console.log('='.repeat(70) + '\n');
 
-  // Generate all secrets
   log('cyan', '📡 Generating secure values...\n');
   
   const secrets = {
@@ -775,12 +751,11 @@ async function main() {
     encryptionKey: generateEncryptionKey(),
     apiKey: generateAPIKey(),
     webhookSecret: generateWebhookSecret(),
-    csrfSecret: generateCSRFSecret(), // NEW: CSRF secret
+    csrfSecret: generateCSRFSecret(),
     salt: generateSalt(),
     otpSecret: generateOTPSecret()
   };
   
-  // Get password and generate hash
   if (!password) {
     password = await promptForPassword();
   } else {
@@ -794,7 +769,6 @@ async function main() {
   const passwordHash = generatePasswordHash(password);
   secrets.passwordHash = passwordHash;
   
-  // Display generated values
   log('green', '✅ Generated successfully!\n');
   
   console.log(colors.bright + 'SESSION_SECRET=' + colors.reset + secrets.sessionSecret);
@@ -803,16 +777,14 @@ async function main() {
   console.log(colors.bright + 'ENCRYPTION_KEY=' + colors.reset + secrets.encryptionKey);
   console.log(colors.bright + 'API_KEY=' + colors.reset + secrets.apiKey);
   console.log(colors.bright + 'WEBHOOK_SECRET=' + colors.reset + secrets.webhookSecret);
-  console.log(colors.bright + 'CSRF_SECRET=' + colors.reset + secrets.csrfSecret); // NEW: Display CSRF secret
+  console.log(colors.bright + 'CSRF_SECRET=' + colors.reset + secrets.csrfSecret);
   console.log(colors.bright + 'ADMIN_PASSWORD_HASH=' + colors.reset + passwordHash);
   console.log(colors.dim + '(Password: ' + password + ')' + colors.reset);
   
   console.log('\n' + '='.repeat(70));
   
-  // Prepare environment object
   const env = readEnvFile();
   
-  // Update with generated secrets
   env.SESSION_SECRET = secrets.sessionSecret;
   env.METRICS_API_KEY = secrets.metricsKey;
   env.ADMIN_PASSWORD_HASH = passwordHash;
@@ -825,10 +797,9 @@ async function main() {
   env.ENCRYPTION_KEY = secrets.encryptionKey;
   env.API_KEY = secrets.apiKey;
   env.WEBHOOK_SECRET = secrets.webhookSecret;
-  env.CSRF_SECRET = secrets.csrfSecret; // NEW: Add CSRF secret to env
+  env.CSRF_SECRET = secrets.csrfSecret;
   env.OTP_SECRET = secrets.otpSecret;
   
-  // Set defaults
   env.PORT = env.PORT || '10000';
   env.NODE_ENV = env.NODE_ENV || 'production';
   env.TARGET_URL = env.TARGET_URL || 'https://example.com';
@@ -839,26 +810,22 @@ async function main() {
   env.DEBUG = env.DEBUG || 'false';
   env.DISABLE_DESKTOP_CHALLENGE = env.DISABLE_DESKTOP_CHALLENGE || 'false';
   
-  // Configure Redis if requested
   if (configureRedis) {
     const redisEnv = await promptForRedis();
     Object.assign(env, redisEnv);
   }
   
-  // Configure PostgreSQL if requested
   if (configurePostgres) {
     const pgEnv = await promptForPostgres();
     Object.assign(env, pgEnv);
   }
   
-  // Generate docker-compose secrets if requested
   if (generateDocker) {
     const secretsDir = path.join(process.cwd(), 'secrets');
     if (!fs.existsSync(secretsDir)) {
       fs.mkdirSync(secretsDir, { recursive: true });
     }
     
-    // Write secrets to files for Docker secrets
     Object.entries({
       'session_secret': secrets.sessionSecret,
       'metrics_key': secrets.metricsKey,
@@ -866,7 +833,7 @@ async function main() {
       'encryption_key': secrets.encryptionKey,
       'api_key': secrets.apiKey,
       'webhook_secret': secrets.webhookSecret,
-      'csrf_secret': secrets.csrfSecret, // NEW: Docker secret for CSRF
+      'csrf_secret': secrets.csrfSecret,
       'redis_password': env.REDIS_PASSWORD || '',
       'db_password': env.DB_PASSWORD || ''
     }).forEach(([name, value]) => {
@@ -879,7 +846,6 @@ async function main() {
     });
   }
   
-  // Encrypt secrets if requested
   if (encryptSecrets && env.ENCRYPTION_KEY) {
     const sensitiveKeys = ['DB_PASSWORD', 'REDIS_PASSWORD', 'SMTP_PASS', 'WEBHOOK_SECRET'];
     
@@ -892,9 +858,7 @@ async function main() {
     });
   }
   
-  // Write to file if requested
   if (writeToFile) {
-    // Determine which file to write to
     let targetFile = ENV_FILE;
     if (args.includes('--local')) {
       targetFile = ENV_LOCAL_FILE;
@@ -906,7 +870,6 @@ async function main() {
     
     writeEnvFile(env, targetFile, forceOverwrite);
     
-    // Create .env symlink if needed
     if (targetFile !== ENV_FILE && !fs.existsSync(ENV_FILE)) {
       try {
         fs.symlinkSync(path.basename(targetFile), ENV_FILE);
@@ -918,7 +881,6 @@ async function main() {
   } else {
     log('yellow', '\n📋 Copy the values above to your .env file');
     
-    // Show complete configuration
     console.log('\n' + colors.bright + 'Complete configuration:' + colors.reset);
     console.log('-'.repeat(50));
     Object.entries(env).forEach(([key, value]) => {
@@ -933,7 +895,6 @@ async function main() {
     console.log('\n' + colors.bright + 'Run with --write to save to file' + colors.reset);
   }
   
-  // Security warnings
   console.log('\n' + '='.repeat(70));
   log('yellow', '⚠️  IMPORTANT SECURITY NOTES:');
   console.log('   • Store these values in a secure password manager');
@@ -946,7 +907,6 @@ async function main() {
   console.log('   • Configure Redis with password and TLS in production');
   console.log('='.repeat(70) + '\n');
   
-  // Next steps
   log('cyan', '📋 Next steps:');
   console.log('   1. Review the generated configuration');
   console.log('   2. Test with: npm run dev');
@@ -959,14 +919,12 @@ async function main() {
   rl.close();
 }
 
-// Handle Ctrl+C
 process.on('SIGINT', () => {
   console.log('\n');
   log('yellow', '⚠️  Generation cancelled');
   process.exit(0);
 });
 
-// Run the script
 main().catch(err => {
   log('red', `\n❌ Error: ${err.message}`);
   console.error(err);
