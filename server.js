@@ -402,6 +402,23 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
           logger.warn('Could not verify/add metadata column:', err.message);
         }
 
+        try {
+          // Check if password_hash column exists
+          const passwordHashCheck = await dbPool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='links' AND column_name='password_hash'
+          `);
+          
+          if (passwordHashCheck.rows.length === 0) {
+            logger.info('Adding password_hash column to links table...');
+            await dbPool.query(`ALTER TABLE links ADD COLUMN password_hash TEXT`);
+            logger.info('✅ Added password_hash column');
+          }
+        } catch (err) {
+          logger.warn('Could not verify/add password_hash column:', err.message);
+        }
+
         // Step 3: Create indexes separately
         const indexes = [
           { name: 'idx_links_expires', query: 'CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);' },
@@ -1276,7 +1293,7 @@ app.get('/metrics', async (req, res) => {
   res.send(await promClient.register.metrics());
 });
 
-// Generate Link - FIXED validation
+// Generate Link - FIXED validation with password support
 app.post('/api/generate', csrfProtection, [
   body('url').optional().isURL().withMessage('Valid URL required'),
   body('password').optional().isString().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
@@ -1343,7 +1360,7 @@ app.post('/api/generate', csrfProtection, [
     };
     
     io.emit('link-generated', response);
-    logRequest('generate', req, res, { id });
+    logRequest('generate', req, res, { id, passwordProtected: !!password });
     
     if (analyticsQueue) {
       analyticsQueue.add({ type: 'generate', data: { id, passwordProtected: !!password } });
@@ -1620,22 +1637,53 @@ app.post('/track/success', (req, res) => {
   res.json({ ok: true });
 });
 
-// Password Protected Link
+// ENHANCED: Password Protected Link Verification
 app.post('/v/:id/verify', express.json(), async (req, res, next) => {
   try {
     const linkId = req.params.id;
     const { password } = req.body;
     
-    const linkData = linkCache.get(linkId);
-    if (!linkData) {
-      throw new AppError('Link not found', 404);
+    // Check cache first
+    let linkData = linkCache.get(linkId);
+    
+    // If not in cache, try database
+    if (!linkData && dbPool) {
+      const result = await dbPool.query(
+        'SELECT * FROM links WHERE id = $1 AND expires_at > NOW()',
+        [linkId]
+      );
+      
+      if (result.rows.length > 0) {
+        const row = result.rows[0];
+        linkData = {
+          target: row.target_url,
+          passwordHash: row.password_hash,
+          maxClicks: row.max_clicks,
+          currentClicks: row.current_clicks,
+          expiresAt: new Date(row.expires_at).getTime(),
+          created: new Date(row.created_at).getTime(),
+          notes: row.notes
+        };
+        // Add to cache
+        const ttl = Math.max(60, Math.floor((linkData.expiresAt - Date.now()) / 1000));
+        linkCache.set(linkId, linkData, ttl);
+      }
     }
     
-    if (linkData.passwordHash) {
-      const valid = await bcrypt.compare(password, linkData.passwordHash);
-      if (!valid) {
-        throw new AppError('Invalid password', 401);
-      }
+    if (!linkData) {
+      throw new AppError('Link not found or expired', 404);
+    }
+    
+    // Check if link has password protection
+    if (!linkData.passwordHash) {
+      // No password required, redirect immediately
+      return res.json({ success: true, target: linkData.target, redirect: true });
+    }
+    
+    // Verify password
+    const valid = await bcrypt.compare(password, linkData.passwordHash);
+    if (!valid) {
+      throw new AppError('Invalid password', 401);
     }
     
     // Update last accessed
@@ -1652,7 +1700,7 @@ app.post('/v/:id/verify', express.json(), async (req, res, next) => {
   }
 });
 
-// Verification Gate
+// ENHANCED: Verification Gate with Password Protection
 app.get('/v/:id', strictLimiter, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -1665,6 +1713,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
     }
     
+    // Rate limiting per link+IP
     const linkKey = `${linkId}:${ip}`;
     const requestCount = linkRequestCache.get(linkKey) || 0;
     
@@ -1682,7 +1731,32 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
     }
 
-    const data = linkCache.get(linkId);
+    // Get link data from cache or database
+    let data = linkCache.get(linkId);
+    
+    if (!data && dbPool) {
+      const result = await dbPool.query(
+        'SELECT * FROM links WHERE id = $1 AND expires_at > NOW()',
+        [linkId]
+      );
+      
+      if (result.rows.length > 0) {
+        const row = result.rows[0];
+        data = {
+          target: row.target_url,
+          passwordHash: row.password_hash,
+          maxClicks: row.max_clicks,
+          currentClicks: row.current_clicks,
+          expiresAt: new Date(row.expires_at).getTime(),
+          created: new Date(row.created_at).getTime(),
+          notes: row.notes
+        };
+        // Add to cache
+        const ttl = Math.max(60, Math.floor((data.expiresAt - Date.now()) / 1000));
+        linkCache.set(linkId, data, ttl);
+      }
+    }
+
     if (!data) {
       stats.expiredLinks++;
       logRequest('expired', req, res, { linkId });
@@ -1697,22 +1771,25 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
     }
 
+    // Check expiration
     if (data.expiresAt < Date.now()) {
       linkCache.del(linkId);
       stats.expiredLinks++;
       return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
     }
 
+    // Check max clicks
     if (data.maxClicks && data.currentClicks >= data.maxClicks) {
       linkCache.del(linkId);
       return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
     }
 
+    // Increment click counter
     data.currentClicks = (data.currentClicks || 0) + 1;
     data.lastAccessed = Date.now();
     linkCache.set(linkId, data);
 
-    logRequest('redirect', req, res, { target: data.target.substring(0, 50) });
+    logRequest('redirect-attempt', req, res, { target: data.target.substring(0, 50), hasPassword: !!data.passwordHash });
 
     if (dbPool && redirectQueue) {
       redirectQueue.add({
@@ -1724,6 +1801,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       });
     }
 
+    // Handle embed mode
     if (embed) {
       return res.send(`
         <!DOCTYPE html>
@@ -1742,51 +1820,469 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       `);
     }
 
+    // ENHANCED: Password Protected Link UI
     if (data.passwordHash) {
+      const nonce = res.locals.nonce;
+      const error = req.query.error === 'true' ? 'Invalid password' : '';
+      
       return res.send(`
         <!DOCTYPE html>
         <html>
         <head>
           <title>Password Protected - Redirector Pro</title>
           <meta name="viewport" content="width=device-width, initial-scale=1">
+          <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
           <style>
-            *{margin:0;padding:0;box-sizing:border-box}
-            body{font-family:sans-serif;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center}
-            .card{background:white;padding:2rem;border-radius:16px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3)}
-            h2{color:#333;margin-bottom:1rem;text-align:center}
-            input{width:100%;padding:0.75rem;margin:1rem 0;border:2px solid #e0e0e0;border-radius:8px}
-            button{width:100%;padding:1rem;background:linear-gradient(135deg,#667eea 0,#764ba2 100%);color:white;border:none;border-radius:8px;cursor:pointer}
-            .error{color:#c00;margin-top:0.5rem;display:none}
+            * {
+              margin: 0;
+              padding: 0;
+              box-sizing: border-box;
+            }
+            
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 20px;
+            }
+            
+            .container {
+              width: 100%;
+              max-width: 420px;
+              animation: slideUp 0.5s ease;
+            }
+            
+            @keyframes slideUp {
+              from {
+                opacity: 0;
+                transform: translateY(20px);
+              }
+              to {
+                opacity: 1;
+                transform: translateY(0);
+              }
+            }
+            
+            .card {
+              background: white;
+              border-radius: 24px;
+              padding: 2.5rem 2rem;
+              box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
+              position: relative;
+              overflow: hidden;
+            }
+            
+            .card::before {
+              content: '';
+              position: absolute;
+              top: 0;
+              left: 0;
+              right: 0;
+              height: 4px;
+              background: linear-gradient(90deg, #667eea, #764ba2);
+            }
+            
+            .logo {
+              text-align: center;
+              margin-bottom: 2rem;
+            }
+            
+            .logo-icon {
+              width: 72px;
+              height: 72px;
+              background: linear-gradient(135deg, #667eea, #764ba2);
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              margin: 0 auto 1.5rem;
+              color: white;
+              font-size: 2rem;
+              box-shadow: 0 10px 20px -5px rgba(102,126,234,0.5);
+            }
+            
+            h1 {
+              font-size: 1.75rem;
+              color: #1a1a1a;
+              margin-bottom: 0.5rem;
+              font-weight: 600;
+            }
+            
+            .subtitle {
+              color: #666;
+              font-size: 0.95rem;
+            }
+            
+            .info-box {
+              background: #f0f9ff;
+              border: 1px solid #bae6fd;
+              border-radius: 12px;
+              padding: 1rem;
+              margin: 1.5rem 0;
+              display: flex;
+              align-items: center;
+              gap: 0.75rem;
+              color: #0369a1;
+            }
+            
+            .info-box i {
+              font-size: 1.25rem;
+            }
+            
+            .info-box span {
+              font-size: 0.9rem;
+              line-height: 1.4;
+            }
+            
+            .alert {
+              background: #fef2f2;
+              border: 1px solid #fecaca;
+              color: #b91c1c;
+              padding: 1rem;
+              border-radius: 12px;
+              margin-bottom: 1.5rem;
+              display: ${error ? 'flex' : 'none'};
+              align-items: center;
+              gap: 0.75rem;
+              animation: shake 0.5s ease;
+            }
+            
+            @keyframes shake {
+              0%, 100% { transform: translateX(0); }
+              10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+              20%, 40%, 60%, 80% { transform: translateX(5px); }
+            }
+            
+            .alert i {
+              font-size: 1.25rem;
+            }
+            
+            .form-group {
+              margin-bottom: 1.5rem;
+            }
+            
+            label {
+              display: block;
+              margin-bottom: 0.5rem;
+              color: #4a5568;
+              font-weight: 500;
+              font-size: 0.95rem;
+            }
+            
+            .input-wrapper {
+              position: relative;
+            }
+            
+            .input-icon {
+              position: absolute;
+              left: 16px;
+              top: 50%;
+              transform: translateY(-50%);
+              color: #9ca3af;
+              font-size: 1.1rem;
+              transition: color 0.2s;
+            }
+            
+            input {
+              width: 100%;
+              padding: 1rem 1rem 1rem 3rem;
+              border: 2px solid #e5e7eb;
+              border-radius: 14px;
+              font-size: 1rem;
+              transition: all 0.2s;
+              background: #f9fafb;
+            }
+            
+            input:focus {
+              outline: none;
+              border-color: #667eea;
+              background: white;
+              box-shadow: 0 0 0 4px rgba(102,126,234,0.1);
+            }
+            
+            input:focus + .input-icon {
+              color: #667eea;
+            }
+            
+            .password-toggle {
+              position: absolute;
+              right: 16px;
+              top: 50%;
+              transform: translateY(-50%);
+              background: none;
+              border: none;
+              color: #9ca3af;
+              cursor: pointer;
+              font-size: 1.1rem;
+              padding: 4px;
+              border-radius: 8px;
+              transition: all 0.2s;
+            }
+            
+            .password-toggle:hover {
+              color: #667eea;
+              background: #f3f4f6;
+            }
+            
+            button {
+              width: 100%;
+              padding: 1rem;
+              background: linear-gradient(135deg, #667eea, #764ba2);
+              color: white;
+              border: none;
+              border-radius: 14px;
+              font-size: 1rem;
+              font-weight: 600;
+              cursor: pointer;
+              transition: all 0.2s;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              gap: 10px;
+              position: relative;
+              overflow: hidden;
+            }
+            
+            button::before {
+              content: '';
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              width: 0;
+              height: 0;
+              border-radius: 50%;
+              background: rgba(255,255,255,0.2);
+              transform: translate(-50%, -50%);
+              transition: width 0.6s, height 0.6s;
+            }
+            
+            button:hover::before {
+              width: 300px;
+              height: 300px;
+            }
+            
+            button:hover {
+              transform: translateY(-2px);
+              box-shadow: 0 10px 25px -5px #667eea;
+            }
+            
+            button:disabled {
+              opacity: 0.7;
+              transform: none;
+              cursor: not-allowed;
+            }
+            
+            .loading {
+              display: none;
+              text-align: center;
+              margin-top: 1.5rem;
+              color: #667eea;
+            }
+            
+            .loading i {
+              animation: spin 1s linear infinite;
+            }
+            
+            @keyframes spin {
+              from { transform: rotate(0deg); }
+              to { transform: rotate(360deg); }
+            }
+            
+            .footer {
+              text-align: center;
+              margin-top: 2rem;
+              color: #9ca3af;
+              font-size: 0.85rem;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              gap: 8px;
+            }
+            
+            .footer i {
+              color: #667eea;
+            }
+            
+            .security-badge {
+              display: flex;
+              justify-content: center;
+              gap: 1rem;
+              margin-top: 1.5rem;
+              font-size: 0.8rem;
+              color: #9ca3af;
+            }
+            
+            .security-badge span {
+              display: flex;
+              align-items: center;
+              gap: 4px;
+            }
+            
+            .security-badge i {
+              color: #10b981;
+            }
           </style>
         </head>
         <body>
-          <div class="card">
-            <h2>🔒 Password Protected</h2>
-            <input type="password" id="password" placeholder="Enter password">
-            <button onclick="verify()">Access Link</button>
-            <div class="error" id="error">Invalid password</div>
+          <div class="container">
+            <div class="card">
+              <div class="logo">
+                <div class="logo-icon">
+                  <i class="fas fa-lock"></i>
+                </div>
+                <h1>Protected Link</h1>
+                <div class="subtitle">This link requires a password</div>
+              </div>
+              
+              <div class="info-box">
+                <i class="fas fa-info-circle"></i>
+                <span>Enter the password to access the secured content</span>
+              </div>
+              
+              <div class="alert" id="errorAlert">
+                <i class="fas fa-exclamation-circle"></i>
+                <span id="errorMessage">${error}</span>
+              </div>
+              
+              <form id="passwordForm">
+                <div class="form-group">
+                  <label for="password">Password</label>
+                  <div class="input-wrapper">
+                    <i class="fas fa-lock input-icon"></i>
+                    <input 
+                      type="password" 
+                      id="password" 
+                      placeholder="Enter your password" 
+                      autofocus
+                      required
+                    >
+                    <button type="button" class="password-toggle" id="togglePassword" tabindex="-1">
+                      <i class="far fa-eye"></i>
+                    </button>
+                  </div>
+                </div>
+                
+                <button type="submit" id="submitBtn">
+                  <i class="fas fa-arrow-right"></i>
+                  Access Link
+                </button>
+                
+                <div class="loading" id="loading">
+                  <i class="fas fa-spinner"></i> Verifying...
+                </div>
+              </form>
+              
+              <div class="security-badge">
+                <span><i class="fas fa-shield-alt"></i> 256-bit SSL</span>
+                <span><i class="fas fa-clock"></i> Encrypted</span>
+                <span><i class="fas fa-lock"></i> Secure</span>
+              </div>
+              
+              <div class="footer">
+                <i class="fas fa-shield-halved"></i>
+                Redirector Pro • Secure Link Protection
+              </div>
+            </div>
           </div>
-          <script nonce="${res.locals.nonce}">
-            async function verify() {
-              const password = document.getElementById('password').value;
-              const res = await fetch('/v/${linkId}/verify', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({password})
-              });
-              if (res.ok) {
-                const data = await res.json();
-                window.location.href = data.target;
-              } else {
-                document.getElementById('error').style.display = 'block';
+          
+          <script nonce="${nonce}">
+            const form = document.getElementById('passwordForm');
+            const passwordInput = document.getElementById('password');
+            const submitBtn = document.getElementById('submitBtn');
+            const loading = document.getElementById('loading');
+            const errorAlert = document.getElementById('errorAlert');
+            const errorMessage = document.getElementById('errorMessage');
+            const togglePassword = document.getElementById('togglePassword');
+            
+            // Toggle password visibility
+            togglePassword.addEventListener('click', () => {
+              const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+              passwordInput.setAttribute('type', type);
+              togglePassword.querySelector('i').className = type === 'password' ? 'far fa-eye' : 'far fa-eye-slash';
+            });
+            
+            form.addEventListener('submit', async (e) => {
+              e.preventDefault();
+              
+              const password = passwordInput.value.trim();
+              
+              if (!password) {
+                showError('Please enter a password');
+                return;
               }
+              
+              // Disable form
+              submitBtn.disabled = true;
+              loading.style.display = 'block';
+              errorAlert.style.display = 'none';
+              
+              try {
+                const response = await fetch('/v/${linkId}/verify', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                  // Successful verification
+                  if (data.redirect) {
+                    // No password needed, redirect immediately
+                    window.location.href = data.target;
+                  } else {
+                    // Password verified, redirect
+                    window.location.href = data.target;
+                  }
+                } else {
+                  // Show error
+                  showError(data.error || 'Invalid password');
+                  
+                  // Re-enable form
+                  submitBtn.disabled = false;
+                  loading.style.display = 'none';
+                  passwordInput.value = '';
+                  passwordInput.focus();
+                }
+              } catch (err) {
+                showError('Connection error. Please try again.');
+                submitBtn.disabled = false;
+                loading.style.display = 'none';
+              }
+            });
+            
+            function showError(message) {
+              errorMessage.textContent = message;
+              errorAlert.style.display = 'flex';
+              
+              setTimeout(() => {
+                errorAlert.style.display = 'none';
+              }, 3000);
             }
+            
+            // Handle Enter key
+            passwordInput.addEventListener('keypress', (e) => {
+              if (e.key === 'Enter' && !submitBtn.disabled) {
+                form.dispatchEvent(new Event('submit'));
+              }
+            });
+            
+            // Clear error on input
+            passwordInput.addEventListener('input', () => {
+              errorAlert.style.display = 'none';
+            });
           </script>
         </body>
         </html>
       `);
     }
 
+    // Handle QR code display
     if (showQr) {
       const qrData = await QRCode.toDataURL(data.target);
       return res.send(`
@@ -1828,6 +2324,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       `);
     }
 
+    // Mobile redirect
     if (deviceInfo.isMobile) {
       stats.successfulRedirects++;
       return res.send(`<!DOCTYPE html>
@@ -1837,11 +2334,13 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
 </html>`);
     }
 
+    // Desktop challenge (if enabled)
     if (validatedConfig.DISABLE_DESKTOP_CHALLENGE) {
       stats.successfulRedirects++;
       return res.send(`<meta http-equiv="refresh" content="0;url=${data.target}">`);
     }
 
+    // Human verification challenge
     const hpSuffix = crypto.randomBytes(2).toString('hex');
     const nonce = res.locals.nonce;
 
