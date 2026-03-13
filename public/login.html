@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
   
   <style>
-    /* CSS Variables for Theming */
+    /* Your existing CSS stays exactly the same */
     :root {
       --primary-50: #eef2ff;
       --primary-100: #e0e7ff;
@@ -658,7 +658,7 @@
         <div class="logo-subtitle">Enterprise Command Center</div>
       </div>
       
-      <!-- CSRF Token (Hidden) -->
+      <!-- CSRF Token (Will be injected by server) -->
       <input type="hidden" id="csrfToken" value="">
       
       <!-- Error Alert -->
@@ -803,50 +803,30 @@
     // Initialize
     document.addEventListener('DOMContentLoaded', initialize);
     
-    async function initialize() {
-      await fetchCsrfToken();
+    function initialize() {
+      // Get CSRF token from the page (injected by server)
+      const tokenElement = document.getElementById('csrfToken');
+      csrfToken = tokenElement ? tokenElement.value : '';
+      
+      if (!csrfToken) {
+        console.error('❌ CSRF token not found in page');
+        showError('Security token missing. Please refresh the page.');
+        
+        // Try to reload after 2 seconds
+        setTimeout(() => window.location.reload(), 2000);
+        return;
+      }
+      
+      console.log('✅ CSRF token loaded from page');
       loadSavedCredentials();
       startAttemptTimer();
       
-      // Clear any existing session data
-      if (window.performance && window.performance.navigation.type === 1) {
-        console.log('Page was refreshed');
-      }
-    }
-    
-    // Fetch CSRF Token from server
-    async function fetchCsrfToken() {
-      try {
-        const response = await fetch('/admin/login', {
-          method: 'GET',
-          credentials: 'include',
-          headers: {
-            'Accept': 'text/html',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const html = await response.text();
-        
-        // Extract CSRF token using regex
-        const tokenMatch = html.match(/name=["']_csrf["'] value=["']([^"']+)["']/);
-        if (tokenMatch && tokenMatch[1]) {
-          csrfToken = tokenMatch[1];
-          document.getElementById('csrfToken').value = csrfToken;
-          console.log('CSRF token loaded successfully');
-        } else {
-          console.error('CSRF token not found in response');
-          showError('Security token not found. Please refresh the page.');
-        }
-      } catch (err) {
-        console.error('Failed to fetch CSRF token:', err);
-        showError('Unable to establish secure connection. Please check your network and refresh.');
+      // Clean URL on load (remove any query parameters)
+      if (window.location.search) {
+        const cleanUrl = window.location.protocol + '//' + 
+                        window.location.host + 
+                        window.location.pathname;
+        window.history.replaceState(null, null, cleanUrl);
       }
     }
     
@@ -988,6 +968,9 @@
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       
+      // Prevent any default form behavior that might add to URL
+      e.stopPropagation();
+      
       // Check if locked out
       if (lockoutUntil && Date.now() < lockoutUntil) {
         const remaining = Math.ceil((lockoutUntil - Date.now()) / 1000);
@@ -1018,7 +1001,7 @@
       // Check CSRF token
       if (!csrfToken) {
         showError('Security token missing. Refreshing...');
-        await fetchCsrfToken();
+        setTimeout(() => window.location.reload(), 2000);
         return;
       }
       
@@ -1087,7 +1070,7 @@
             disableForm(true);
             
             // Log the lockout
-            console.warn(`Account locked for IP until ${new Date(lockoutUntil).toISOString()}`);
+            console.warn(`Account locked until ${new Date(lockoutUntil).toISOString()}`);
           } else {
             // Show error
             const remaining = MAX_ATTEMPTS - loginAttempts;
@@ -1165,6 +1148,22 @@
         clearInterval(countdownInterval);
       }
     });
+    
+    // Additional safety: monitor URL for changes
+    let lastUrl = location.href;
+    new MutationObserver(() => {
+      const url = location.href;
+      if (url !== lastUrl) {
+        lastUrl = url;
+        if (location.search) {
+          // If URL gets query parameters, clean them
+          const cleanUrl = location.protocol + '//' + 
+                          location.host + 
+                          location.pathname;
+          history.replaceState(null, null, cleanUrl);
+        }
+      }
+    }).observe(document, {subtree: true, childList: true});
   </script>
 </body>
 </html>
