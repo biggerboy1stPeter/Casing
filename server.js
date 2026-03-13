@@ -294,10 +294,12 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
       }
     });
 
-    // Create tables with proper schema and error handling - FIXED ORDER
+    // Create tables with proper schema and error handling - FIXED ORDER with separate steps
     const createTables = async () => {
       try {
-        // First create all tables without indexes that depend on columns
+        logger.info('📦 Creating database tables...');
+        
+        // Step 1: Create all tables without indexes
         await dbPool.query(`
           CREATE TABLE IF NOT EXISTS links (
             id VARCHAR(32) PRIMARY KEY,
@@ -312,7 +314,9 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
             status VARCHAR(20) DEFAULT 'active',
             metadata JSONB DEFAULT '{}'
           );
-
+        `);
+        
+        await dbPool.query(`
           CREATE TABLE IF NOT EXISTS clicks (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             link_id VARCHAR(32) REFERENCES links(id) ON DELETE CASCADE,
@@ -324,27 +328,35 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
             referer TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
+        `);
 
+        await dbPool.query(`
           CREATE TABLE IF NOT EXISTS logs (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             data JSONB NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
+        `);
 
+        await dbPool.query(`
           CREATE TABLE IF NOT EXISTS analytics (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             type VARCHAR(50) NOT NULL,
             data JSONB NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
+        `);
 
+        await dbPool.query(`
           CREATE TABLE IF NOT EXISTS settings (
             key VARCHAR(100) PRIMARY KEY,
             value JSONB NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_by VARCHAR(100)
           );
+        `);
 
+        await dbPool.query(`
           CREATE TABLE IF NOT EXISTS blocked_ips (
             ip INET PRIMARY KEY,
             reason TEXT,
@@ -353,25 +365,66 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
           );
         `);
 
-        // Then create indexes separately to avoid column dependency issues
-        await dbPool.query(`
-          CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);
-          CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);
-          CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);
-          CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);
-          CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);
-          CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);
-          CREATE INDEX IF NOT EXISTS idx_blocked_ips_expires ON blocked_ips(expires_at);
-        `);
-        
-        logger.info('✅ Database tables verified/created successfully');
+        logger.info('✅ Tables created successfully');
+
+        // Step 2: Create indexes separately with error handling for each
+        try {
+          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);`);
+          logger.info('✅ Created index idx_links_expires');
+        } catch (err) {
+          logger.warn('Could not create idx_links_expires:', err.message);
+        }
+
+        try {
+          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);`);
+          logger.info('✅ Created index idx_links_status');
+        } catch (err) {
+          logger.warn('Could not create idx_links_status:', err.message);
+        }
+
+        try {
+          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);`);
+          logger.info('✅ Created index idx_clicks_link_id');
+        } catch (err) {
+          logger.warn('Could not create idx_clicks_link_id:', err.message);
+        }
+
+        try {
+          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);`);
+          logger.info('✅ Created index idx_clicks_created');
+        } catch (err) {
+          logger.warn('Could not create idx_clicks_created:', err.message);
+        }
+
+        try {
+          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);`);
+          logger.info('✅ Created index idx_analytics_type');
+        } catch (err) {
+          logger.warn('Could not create idx_analytics_type:', err.message);
+        }
+
+        try {
+          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);`);
+          logger.info('✅ Created index idx_analytics_created');
+        } catch (err) {
+          logger.warn('Could not create idx_analytics_created:', err.message);
+        }
+
+        try {
+          await dbPool.query(`CREATE INDEX IF NOT EXISTS idx_blocked_ips_expires ON blocked_ips(expires_at);`);
+          logger.info('✅ Created index idx_blocked_ips_expires');
+        } catch (err) {
+          logger.warn('Could not create idx_blocked_ips_expires:', err.message);
+        }
+
+        logger.info('✅ Database initialization completed');
       } catch (err) {
-        logger.error('Database table creation error:', err);
+        logger.error('Database initialization error:', err);
         // Don't exit, continue with limited functionality
       }
     };
 
-    // Run table creation without awaiting to not block startup
+    // Run table creation in the background
     createTables();
     
     logger.info('✅ Database connected');
