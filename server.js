@@ -915,44 +915,65 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
+
       scriptSrc: [
-        "'self'", 
-        (req, res) => `'nonce-${res.locals.nonce}'`, 
-        'https://cdn.socket.io', 
-        'https://cdn.jsdelivr.net', 
-        'https://cdnjs.cloudflare.com',
-        'https://fonts.googleapis.com',
-        'https://fonts.gstatic.com'
+        "'self'",
+        (req, res) => `'nonce-${res.locals.nonce}'`,
+        'https://cdn.socket.io',
+        'https://cdn.jsdelivr.net',
+        'https://cdnjs.cloudflare.com'
+        // Note: fonts.googleapis.com & fonts.gstatic.com do NOT belong in script-src
       ],
+
       styleSrc: [
-        "'self'", 
-        "'unsafe-inline'", 
-        'https://cdn.jsdelivr.net', 
+        "'self'",
+        "'unsafe-inline'",                // needed for your large inline <style>
+        'https://cdn.jsdelivr.net',
         'https://cdnjs.cloudflare.com',
-        'https://fonts.googleapis.com',
-        'https://fonts.gstatic.com'
+        'https://fonts.googleapis.com'    // Google Fonts CSS loader
       ],
+
       fontSrc: [
-        "'self'", 
-        'https://cdnjs.cloudflare.com', 
-        'https://fonts.gstatic.com',
-        'data:'
+        "'self'",
+        'https://cdnjs.cloudflare.com',   // Font Awesome fonts
+        'https://fonts.gstatic.com',      // Google Fonts actual font files
+        'data:'                           // base64/small inline fonts
       ],
-      imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'", 'ws:', 'wss:'],
+
+      imgSrc: [
+        "'self'",
+        'data:',
+        'https:'                          // safe & common allowance for external images
+      ],
+
+      connectSrc: [
+        "'self'",
+        'ws:',
+        'wss:',
+        'https://cdn.socket.io',          // fixes Socket.IO .map + polling
+        'https://cdn.jsdelivr.net'        // fixes Chart.js .map files
+        // Add more only if you do client-side fetch() to other domains
+      ],
+
       frameSrc: ["'none'"],
       objectSrc: ["'none'"],
+
       upgradeInsecureRequests: NODE_ENV === 'production' ? [] : null
     }
   },
+
   hsts: {
     maxAge: 31536000,
     includeSubDomains: true,
     preload: true
   },
+
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   noSniff: true,
-  xssFilter: true
+  xssFilter: true,
+
+  // Good to have (hides Express fingerprint)
+  hidePoweredBy: true
 }));
 
 app.use(express.json({ limit: '50kb' }));
