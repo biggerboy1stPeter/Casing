@@ -72,7 +72,8 @@ const configSchema = Joi.object({
   HTTPS_ENABLED: Joi.boolean().default(false),
   DEBUG: Joi.boolean().default(false),
   BULL_BOARD_ENABLED: Joi.boolean().default(true),
-  BULL_BOARD_PATH: Joi.string().default('/admin/queues')
+  BULL_BOARD_PATH: Joi.string().default('/admin/queues'),
+  CSRF_SECRET: Joi.string().min(32).optional()
 });
 
 const { error: configError, value: validatedConfig } = configSchema.validate(process.env, {
@@ -341,12 +342,20 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
         updated_by VARCHAR(100)
       );
 
+      CREATE TABLE IF NOT EXISTS blocked_ips (
+        ip INET PRIMARY KEY,
+        reason TEXT,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);
       CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);
       CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);
       CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);
       CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);
       CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);
+      CREATE INDEX IF NOT EXISTS idx_blocked_ips_expires ON blocked_ips(expires_at);
     `).catch(err => {
       if (validatedConfig.DEBUG) {
         logger.error('Database initialization error:', err);
@@ -438,6 +447,30 @@ app.use(session({
   },
   rolling: true
 }));
+
+// ─── Security Middleware - Block URL Parameters with Credentials ───────────
+app.use((req, res, next) => {
+  // Block any requests with username or password in query parameters
+  if (req.query.username || req.query.password) {
+    logger.error('🚫 Blocked request with credentials in URL', {
+      ip: req.ip,
+      path: req.path,
+      query: Object.keys(req.query)
+    });
+    
+    // If it's a login page request, redirect to clean URL
+    if (req.path === '/admin/login') {
+      return res.redirect('/admin/login');
+    }
+    
+    // Otherwise return error
+    return res.status(400).json({ 
+      error: 'Invalid request format - credentials should not be in URL',
+      code: 'CREDENTIALS_IN_URL'
+    });
+  }
+  next();
+});
 
 // ─── CSRF Protection (Session-based) ─────────────────────────────────────
 app.use((req, res, next) => {
@@ -561,6 +594,19 @@ const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10, useClones:
 const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 10000 });
 const deviceCache = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false, maxKeys: 50000 });
 const qrCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 1000 });
+
+// Login attempt tracking
+const loginAttempts = new Map();
+
+// Clean up old login attempts every hour
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, data] of loginAttempts.entries()) {
+    if (now - data.lastAttempt > 3600000) { // 1 hour
+      loginAttempts.delete(ip);
+    }
+  }
+}, 3600000);
 
 // Stats Tracking
 const stats = {
@@ -1862,42 +1908,112 @@ app.get('/qr/download', async (req, res, next) => {
 
 // Admin Routes - Serve HTML
 app.get('/admin/login', (req, res) => {
+  // Block any requests with query parameters
+  if (Object.keys(req.query).length > 0) {
+    logger.warn('🚫 Blocked login attempt with query params', { 
+      ip: req.ip, 
+      query: req.query 
+    });
+    return res.redirect('/admin/login');
+  }
+  
   if (req.session.authenticated) {
     return res.redirect('/admin');
   }
   
   // Regenerate session ID to prevent fixation
-  req.session.regenerate((err) => {
+  req.session.regenerate(async (err) => {
     if (err) {
       logger.error('Session regeneration error:', err);
     }
     
+    // Generate new CSRF token
     const csrfToken = crypto.randomBytes(32).toString('hex');
     req.session.csrfToken = csrfToken;
     
-    // Serve login HTML
-    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+    try {
+      // Read the login.html file
+      const loginHtmlPath = path.join(__dirname, 'public', 'login.html');
+      let html = await fs.readFile(loginHtmlPath, 'utf8');
+      
+      // Inject the CSRF token into the HTML
+      html = html.replace(
+        '<input type="hidden" id="csrfToken" value="">',
+        `<input type="hidden" id="csrfToken" value="${csrfToken}">`
+      );
+      
+      res.send(html);
+    } catch (err) {
+      logger.error('Failed to read login.html:', err);
+      res.status(500).send('Login page not found');
+    }
   });
 });
 
 app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, remember } = req.body;
     
-    const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
-    const attempts = linkRequestCache.get(`login:${ip}`) || 0;
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
     
-    if (attempts >= 5) {
-      throw new AppError('Too many login attempts. Try again later.', 429);
+    // Check if IP is blocked
+    if (dbPool) {
+      const blocked = await dbPool.query(
+        'SELECT * FROM blocked_ips WHERE ip = $1 AND expires_at > NOW()',
+        [ip]
+      );
+      if (blocked.rows.length > 0) {
+        logger.error(`Blocked IP attempted login: ${ip}`);
+        throw new AppError('Access denied', 403);
+      }
     }
     
-    linkRequestCache.set(`login:${ip}`, attempts + 1, 300);
-
+    // Check for credentials in URL (should never happen in POST)
+    if (req.url.includes('?') || Object.keys(req.query).length > 0) {
+      logger.error('Login POST with query parameters', { ip, url: req.url });
+      throw new AppError('Invalid request format', 400);
+    }
+    
+    // Track login attempts
+    const attemptData = loginAttempts.get(ip) || { count: 0, lastAttempt: Date.now() };
+    attemptData.count++;
+    attemptData.lastAttempt = Date.now();
+    loginAttempts.set(ip, attemptData);
+    
+    // Progressive rate limiting
+    if (attemptData.count > 10) {
+      logger.error(`Excessive login attempts from ${ip}: ${attemptData.count}`);
+      
+      // Block IP in database
+      if (dbPool) {
+        await dbPool.query(
+          'INSERT INTO blocked_ips (ip, reason, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'1 hour\') ON CONFLICT (ip) DO UPDATE SET expires_at = NOW() + INTERVAL \'1 hour\'',
+          [ip, 'Excessive login attempts']
+        );
+      }
+      
+      throw new AppError('Too many login attempts. IP blocked for 1 hour.', 429);
+    }
+    
+    if (attemptData.count > 5) {
+      // Add delay for suspicious attempts
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    // Validate input
+    if (!username || !password) {
+      throw new AppError('Username and password required', 400);
+    }
+    
+    // Check credentials
     if (username === ADMIN_USERNAME && await bcrypt.compare(password, ADMIN_PASSWORD_HASH)) {
-      // Regenerate session after successful login
+      // Successful login - reset attempts
+      loginAttempts.delete(ip);
+      
       req.session.regenerate((err) => {
         if (err) {
           logger.error('Session regeneration error:', err);
+          return next(err);
         }
         
         req.session.authenticated = true;
@@ -1905,10 +2021,18 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
         req.session.loginTime = Date.now();
         req.session.csrfToken = crypto.randomBytes(32).toString('hex');
         
-        linkRequestCache.del(`login:${ip}`);
+        // Set session length based on remember me
+        if (remember) {
+          req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+        } else {
+          req.session.cookie.maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        }
+        
+        logger.info('Successful admin login', { ip, username });
         res.json({ success: true });
       });
     } else {
+      logger.warn('Failed login attempt', { ip, username, attemptCount: attemptData.count });
       throw new AppError('Invalid credentials', 401);
     }
   } catch (err) {
@@ -1917,25 +2041,30 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
 });
 
 // Main Admin Dashboard
-app.get('/admin', (req, res, next) => {
+app.get('/admin', async (req, res, next) => {
   if (!req.session.authenticated) {
     return res.redirect('/admin/login');
   }
   
-  // Serve dashboard HTML with injected variables
-  let html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
-  
-  // Replace template variables
-  html = html
-    .replace(/{{METRICS_API_KEY}}/g, METRICS_API_KEY)
-    .replace(/{{TARGET_URL}}/g, TARGET_URL)
-    .replace(/{{csrfToken}}/g, req.session.csrfToken)
-    .replace(/{{dbPoolStatus}}/g, dbPool ? 'connected' : 'disconnected')
-    .replace(/{{redisStatus}}/g, redisClient ? 'connected' : 'disconnected')
-    .replace(/{{bullBoardPath}}/g, validatedConfig.BULL_BOARD_PATH)
-    .replace(/{{redirectQueueStatus}}/g, redirectQueue ? 'connected' : 'disconnected');
-  
-  res.send(html);
+  try {
+    // Serve dashboard HTML with injected variables
+    let html = await fs.readFile(path.join(__dirname, 'public', 'index.html'), 'utf8');
+    
+    // Replace template variables
+    html = html
+      .replace(/{{METRICS_API_KEY}}/g, METRICS_API_KEY)
+      .replace(/{{TARGET_URL}}/g, TARGET_URL)
+      .replace(/{{csrfToken}}/g, req.session.csrfToken)
+      .replace(/{{dbPoolStatus}}/g, dbPool ? 'connected' : 'disconnected')
+      .replace(/{{redisStatus}}/g, redisClient?.status === 'ready' ? 'connected' : 'disconnected')
+      .replace(/{{bullBoardPath}}/g, validatedConfig.BULL_BOARD_PATH)
+      .replace(/{{redirectQueueStatus}}/g, redirectQueue ? 'connected' : 'disconnected');
+    
+    res.send(html);
+  } catch (err) {
+    logger.error('Failed to read index.html:', err);
+    res.status(500).send('Dashboard page not found');
+  }
 });
 
 app.post('/admin/logout', (req, res) => {
@@ -2016,6 +2145,32 @@ app.get('/api/export/:id', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// Security monitoring endpoint
+app.get('/admin/security/monitor', (req, res) => {
+  if (!req.session.authenticated) {
+    throw new AppError('Unauthorized', 401);
+  }
+  
+  const now = Date.now();
+  const activeAttacks = [];
+  
+  for (const [ip, data] of loginAttempts.entries()) {
+    if (now - data.lastAttempt < 3600000) {
+      activeAttacks.push({
+        ip,
+        attempts: data.count,
+        lastAttempt: new Date(data.lastAttempt).toISOString()
+      });
+    }
+  }
+  
+  res.json({
+    blockedIPs: [], // Would need to query database for this
+    activeAttacks: activeAttacks.sort((a, b) => b.attempts - a.attempts),
+    totalAttempts: Array.from(loginAttempts.values()).reduce((sum, d) => sum + d.count, 0)
+  });
 });
 
 // 404 Handler
