@@ -367,7 +367,24 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
 
         logger.info('✅ Tables created successfully');
 
-        // Step 2: Check and add any missing columns
+        // Step 2: Verify and add any missing columns
+        try {
+          // Check if ip column exists in clicks table
+          const ipCheck = await dbPool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name='clicks' AND column_name='ip'
+          `);
+          
+          if (ipCheck.rows.length === 0) {
+            logger.info('Adding ip column to clicks table...');
+            await dbPool.query(`ALTER TABLE clicks ADD COLUMN ip INET`);
+            logger.info('✅ Added ip column');
+          }
+        } catch (err) {
+          logger.warn('Could not verify/add ip column:', err.message);
+        }
+
         try {
           // Check if metadata column exists
           const metadataCheck = await dbPool.query(`
@@ -385,11 +402,12 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
           logger.warn('Could not verify/add metadata column:', err.message);
         }
 
-        // Step 3: Create indexes separately with individual error handling
+        // Step 3: Create indexes separately
         const indexes = [
           { name: 'idx_links_expires', query: 'CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);' },
           { name: 'idx_links_status', query: 'CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);' },
           { name: 'idx_clicks_link_id', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);' },
+          { name: 'idx_clicks_ip', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_ip ON clicks(ip);' },
           { name: 'idx_clicks_created', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);' },
           { name: 'idx_analytics_type', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);' },
           { name: 'idx_analytics_created', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);' },
@@ -1258,18 +1276,18 @@ app.get('/metrics', async (req, res) => {
   res.send(await promClient.register.metrics());
 });
 
-// Generate Link
+// Generate Link - FIXED validation
 app.post('/api/generate', csrfProtection, [
-  body('url').isURL().withMessage('Valid URL required'),
-  body('password').optional().isString().isLength({ min: 6 }),
-  body('maxClicks').optional().isInt({ min: 1, max: 10000 }),
+  body('url').optional().isURL().withMessage('Valid URL required'),
+  body('password').optional().isString().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('maxClicks').optional().isInt({ min: 1, max: 10000 }).withMessage('Max clicks must be between 1 and 10000'),
   body('expiresIn').optional().isString(),
   body('notes').optional().isString().trim().escape()
 ], async (req, res, next) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      throw new AppError(errors.array()[0].msg, 400);
+      return res.status(400).json({ error: errors.array()[0].msg });
     }
 
     const target = req.body.url || TARGET_URL;
@@ -1288,7 +1306,7 @@ app.post('/api/generate', csrfProtection, [
       created: Date.now(),
       expiresAt: Date.now() + (expiresIn * 1000),
       passwordHash: password ? await bcrypt.hash(password, 10) : null,
-      maxClicks,
+      maxClicks: maxClicks ? parseInt(maxClicks) : null,
       currentClicks: 0,
       notes,
       metadata: {
@@ -1300,10 +1318,14 @@ app.post('/api/generate', csrfProtection, [
     linkCache.set(id, linkData, expiresIn);
     
     if (dbPool) {
-      await dbPool.query(
-        'INSERT INTO links (id, target_url, created_at, expires_at, creator_ip, password_hash, max_clicks, current_clicks, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-        [id, target, new Date(), new Date(Date.now() + (expiresIn * 1000)), req.ip, linkData.passwordHash, maxClicks, 0, JSON.stringify(linkData.metadata)]
-      );
+      try {
+        await dbPool.query(
+          'INSERT INTO links (id, target_url, created_at, expires_at, creator_ip, password_hash, max_clicks, current_clicks, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          [id, target, new Date(), new Date(Date.now() + (expiresIn * 1000)), req.ip, linkData.passwordHash, linkData.maxClicks, 0, JSON.stringify(linkData.metadata)]
+        );
+      } catch (dbErr) {
+        logger.error('Database insert error:', dbErr);
+      }
     }
     
     stats.generatedLinks++;
@@ -1316,7 +1338,7 @@ app.post('/api/generate', csrfProtection, [
       id: id,
       created: Date.now(),
       passwordProtected: !!password,
-      maxClicks: maxClicks || null,
+      maxClicks: linkData.maxClicks || null,
       notes: notes || null
     };
     
@@ -1383,7 +1405,7 @@ async function getAllLinks() {
   }
 }
 
-// Get Link Stats
+// Get Link Stats - FIXED column references
 app.get('/api/stats/:id', async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -1410,40 +1432,44 @@ app.get('/api/stats/:id', async (req, res, next) => {
     };
     
     if (dbPool && linkData) {
-      const result = await dbPool.query(
-        `SELECT 
-          COUNT(*) as total_clicks,
-          COUNT(DISTINCT ip) as unique_visitors,
-          COALESCE(jsonb_object_agg(country, country_count) FILTER (WHERE country IS NOT NULL), '{}') as countries,
-          COALESCE(jsonb_object_agg(device_type, device_count) FILTER (WHERE device_type IS NOT NULL), '{}') as devices
-        FROM (
-          SELECT 
-            country,
-            device_type,
-            COUNT(*) as country_count,
-            COUNT(*) as device_count
-          FROM clicks 
-          WHERE link_id = $1
-          GROUP BY country, device_type
-        ) sub`,
-        [linkId]
-      );
-      
-      const recentResult = await dbPool.query(
-        `SELECT ip, country, device_type, created_at 
-         FROM clicks 
-         WHERE link_id = $1 
-         ORDER BY created_at DESC 
-         LIMIT 10`,
-        [linkId]
-      );
-      
-      if (result.rows[0]) {
-        stats = { 
-          ...stats, 
-          ...result.rows[0],
-          recentClicks: recentResult.rows
-        };
+      try {
+        const result = await dbPool.query(
+          `SELECT 
+            COUNT(*) as total_clicks,
+            COUNT(DISTINCT ip) as unique_visitors,
+            COALESCE(jsonb_object_agg(country, country_count) FILTER (WHERE country IS NOT NULL), '{}') as countries,
+            COALESCE(jsonb_object_agg(device_type, device_count) FILTER (WHERE device_type IS NOT NULL), '{}') as devices
+          FROM (
+            SELECT 
+              country,
+              device_type,
+              COUNT(*) as country_count,
+              COUNT(*) as device_count
+            FROM clicks 
+            WHERE link_id = $1
+            GROUP BY country, device_type
+          ) sub`,
+          [linkId]
+        );
+        
+        const recentResult = await dbPool.query(
+          `SELECT ip, country, device_type, created_at 
+           FROM clicks 
+           WHERE link_id = $1 
+           ORDER BY created_at DESC 
+           LIMIT 10`,
+          [linkId]
+        );
+        
+        if (result.rows[0]) {
+          stats = { 
+            ...stats, 
+            ...result.rows[0],
+            recentClicks: recentResult.rows
+          };
+        }
+      } catch (dbErr) {
+        logger.error('Error fetching stats:', dbErr);
       }
     }
     
@@ -2239,7 +2265,7 @@ app.get('/admin/export-logs', async (req, res, next) => {
   }
 });
 
-// Export link data
+// Export link data - FIXED column references
 app.get('/api/export/:id', async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -2254,7 +2280,10 @@ app.get('/api/export/:id', async (req, res, next) => {
     }
     
     const result = await dbPool.query(
-      `SELECT * FROM clicks WHERE link_id = $1 ORDER BY created_at DESC`,
+      `SELECT id, link_id, ip, country, device_type, created_at 
+       FROM clicks 
+       WHERE link_id = $1 
+       ORDER BY created_at DESC`,
       [linkId]
     );
     
@@ -2276,6 +2305,7 @@ app.get('/api/export/:id', async (req, res, next) => {
       res.json(result.rows);
     }
   } catch (err) {
+    logger.error('Export error:', err);
     next(err);
   }
 });
