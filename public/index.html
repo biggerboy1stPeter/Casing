@@ -1,0 +1,1686 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Redirector Pro Admin Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+    }
+    
+    .navbar {
+      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+      color: white;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .navbar h1 {
+      font-size: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .navbar button {
+      background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      padding: 0.5rem 1.5rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .navbar button:hover {
+      background: rgba(255,255,255,0.3);
+      transform: translateY(-1px);
+    }
+    
+    .container {
+      padding: 2rem;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    
+    .stat-card {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      transition: transform 0.2s;
+      border-left: 4px solid #667eea;
+    }
+    
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+    }
+    
+    .stat-card h3 {
+      color: #666;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .stat-card .value {
+      font-size: 2.5rem;
+      font-weight: bold;
+      color: #333;
+      line-height: 1.2;
+    }
+    
+    .stat-card .sub-value {
+      font-size: 0.9rem;
+      color: #999;
+      margin-top: 0.25rem;
+    }
+    
+    .section {
+      background: white;
+      padding: 2rem;
+      border-radius: 12px;
+      margin-bottom: 2rem;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .section h2 {
+      margin-bottom: 1.5rem;
+      color: #333;
+      font-size: 1.3rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 2px solid #f0f0f0;
+      padding-bottom: 0.5rem;
+    }
+    
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+    }
+    
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2rem;
+    }
+    
+    .form-group {
+      margin-bottom: 1rem;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: #555;
+      font-weight: 500;
+    }
+    
+    input, select, textarea {
+      width: 100%;
+      padding: 0.75rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+    
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    button {
+      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-right: 0.5rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102,126,234,0.4);
+    }
+    
+    button.secondary {
+      background: #f0f0f0;
+      color: #333;
+    }
+    
+    button.secondary:hover {
+      background: #e0e0e0;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    button.danger {
+      background: linear-gradient(135deg, #f56565 0, #c53030 100%);
+    }
+    
+    button.success {
+      background: linear-gradient(135deg, #48bb78 0, #2f855a 100%);
+    }
+    
+    .logs-container {
+      background: #1e1e1e;
+      color: #0f0;
+      padding: 1rem;
+      border-radius: 8px;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+      height: 400px;
+      overflow-y: auto;
+      font-size: 0.9rem;
+    }
+    
+    .log-entry {
+      border-bottom: 1px solid #333;
+      padding: 0.5rem 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .log-entry:hover {
+      background: #2a2a2a;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+    }
+    
+    .tab {
+      padding: 0.75rem 1.5rem;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .tab:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+    
+    .tab.active {
+      background: linear-gradient(135deg, #667eea 0, #764ba2 100%);
+      color: white;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .chart-container {
+      height: 300px;
+      margin: 1rem 0;
+      position: relative;
+    }
+    
+    .alert {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 1rem 2rem;
+      border-radius: 8px;
+      color: white;
+      z-index: 1000;
+      display: none;
+      animation: slideIn 0.3s ease;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+    
+    .alert.success {
+      background: linear-gradient(135deg, #48bb78 0, #2f855a 100%);
+    }
+    
+    .alert.error {
+      background: linear-gradient(135deg, #f56565 0, #c53030 100%);
+    }
+    
+    .alert.info {
+      background: linear-gradient(135deg, #4299e1 0, #3182ce 100%);
+    }
+    
+    .result-box {
+      margin-top: 1.5rem;
+      padding: 1.5rem;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #e0e0e0;
+    }
+    
+    .url-display {
+      display: flex;
+      gap: 0.5rem;
+      margin: 1rem 0;
+    }
+    
+    .url-display input {
+      flex: 1;
+      background: white;
+    }
+    
+    .stats-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    
+    .stat-item {
+      background: #f8f9fa;
+      padding: 1rem;
+      border-radius: 8px;
+      text-align: center;
+    }
+    
+    .stat-item .label {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .stat-item .number {
+      font-size: 2rem;
+      font-weight: bold;
+      color: #667eea;
+    }
+    
+    #qrResult {
+      text-align: center;
+      margin-top: 1rem;
+    }
+    
+    #qrResult img {
+      max-width: 200px;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 0.5rem;
+      background: white;
+    }
+    
+    .system-status {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1rem;
+    }
+    
+    .status-card {
+      background: #f8f9fa;
+      padding: 1rem;
+      border-radius: 8px;
+      border-left: 4px solid #667eea;
+    }
+    
+    .status-card .title {
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    
+    .status-card .status {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+    
+    .status-card .status.connected {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+    
+    .status-card .status.disconnected {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+    
+    .links-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    .links-table th {
+      text-align: left;
+      padding: 1rem;
+      background: #f8f9fa;
+      border-bottom: 2px solid #e0e0e0;
+    }
+    
+    .links-table td {
+      padding: 1rem;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    
+    .links-table tr:hover {
+      background: #f8f9fa;
+    }
+    
+    .badge {
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+    
+    .badge.active {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+    
+    .badge.expired {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+    
+    .badge.completed {
+      background: #feebc8;
+      color: #744210;
+    }
+    
+    .action-buttons {
+      display: flex;
+      gap: 0.5rem;
+    }
+    
+    .action-buttons button {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.9rem;
+    }
+    
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .modal.active {
+      display: flex;
+    }
+    
+    .modal-content {
+      background: white;
+      padding: 2rem;
+      border-radius: 12px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    
+    .modal-close {
+      cursor: pointer;
+      font-size: 1.5rem;
+      color: #999;
+    }
+    
+    .setting-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 0;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    
+    .setting-item:last-child {
+      border-bottom: none;
+    }
+    
+    .toggle-switch {
+      position: relative;
+      width: 60px;
+      height: 34px;
+    }
+    
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      border-radius: 34px;
+    }
+    
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 26px;
+      width: 26px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+    
+    input:checked + .toggle-slider {
+      background-color: #667eea;
+    }
+    
+    input:checked + .toggle-slider:before {
+      transform: translateX(26px);
+    }
+    
+    @media (max-width: 768px) {
+      .grid-2, .grid-3 {
+        grid-template-columns: 1fr;
+      }
+      
+      .container {
+        padding: 1rem;
+      }
+      
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .tabs {
+        flex-direction: column;
+      }
+      
+      .tab {
+        width: 100%;
+      }
+      
+      .navbar {
+        flex-direction: column;
+        gap: 1rem;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="alert" id="alert"></div>
+  
+  <div class="navbar">
+    <h1>
+      <i class="fas fa-shield-alt"></i>
+      Redirector Pro Enterprise
+    </h1>
+    <div>
+      <span id="uptime" style="margin-right: 1rem;">
+        <i class="fas fa-clock"></i> <span id="uptimeValue">0h 0m 0s</span>
+      </span>
+      <button onclick="logout()">
+        <i class="fas fa-sign-out-alt"></i>
+        Logout
+      </button>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('dashboard')">
+        <i class="fas fa-chart-line"></i> Dashboard
+      </div>
+      <div class="tab" onclick="showTab('generate')">
+        <i class="fas fa-link"></i> Generate Link
+      </div>
+      <div class="tab" onclick="showTab('links')">
+        <i class="fas fa-list"></i> All Links
+      </div>
+      <div class="tab" onclick="showTab('analytics')">
+        <i class="fas fa-chart-bar"></i> Analytics
+      </div>
+      <div class="tab" onclick="showTab('logs')">
+        <i class="fas fa-history"></i> Live Logs
+      </div>
+      <div class="tab" onclick="showTab('settings')">
+        <i class="fas fa-cog"></i> Settings
+      </div>
+      <div class="tab" onclick="window.location.href='{{bullBoardPath}}'" id="queuesTab" style="display:none">
+        <i class="fas fa-tasks"></i> Queues
+      </div>
+    </div>
+
+    <!-- Dashboard Tab -->
+    <div id="dashboard" class="tab-content active">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <h3><i class="fas fa-globe"></i> Total Requests</h3>
+          <div class="value" id="totalRequests">0</div>
+          <div class="sub-value">all time</div>
+        </div>
+        <div class="stat-card">
+          <h3><i class="fas fa-link"></i> Active Links</h3>
+          <div class="value" id="activeLinks">0</div>
+          <div class="sub-value">current</div>
+        </div>
+        <div class="stat-card">
+          <h3><i class="fas fa-robot"></i> Bot Blocks</h3>
+          <div class="value" id="botBlocks">0</div>
+          <div class="sub-value">threats blocked</div>
+        </div>
+        <div class="stat-card">
+          <h3><i class="fas fa-check-circle"></i> Success Rate</h3>
+          <div class="value" id="successRate">0%</div>
+          <div class="sub-value">last 24h</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="section">
+          <h2><i class="fas fa-chart-line"></i> Requests Over Time</h2>
+          <div class="chart-container">
+            <canvas id="requestsChart"></canvas>
+          </div>
+        </div>
+        <div class="section">
+          <h2><i class="fas fa-mobile-alt"></i> Device Distribution</h2>
+          <div class="chart-container">
+            <canvas id="deviceChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2><i class="fas fa-map-marker-alt"></i> Top Countries</h2>
+        <div class="stats-list" id="countryStats">
+          <div class="stat-item">
+            <div class="label">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Generate Link Tab -->
+    <div id="generate" class="tab-content">
+      <div class="section">
+        <h2><i class="fas fa-plus-circle"></i> Generate New Link</h2>
+        <input type="hidden" name="_csrf" value="{{csrfToken}}">
+        
+        <div class="grid-2">
+          <div>
+            <div class="form-group">
+              <label><i class="fas fa-link"></i> Target URL</label>
+              <input type="url" id="targetUrl" placeholder="https://example.com" value="{{TARGET_URL}}">
+            </div>
+            
+            <div class="form-group">
+              <label><i class="fas fa-lock"></i> Password Protection (optional)</label>
+              <input type="password" id="linkPassword" placeholder="Enter password to protect link">
+            </div>
+            
+            <div class="form-group">
+              <label><i class="fas fa-sticky-note"></i> Notes (optional)</label>
+              <textarea id="linkNotes" placeholder="Add notes about this link" rows="3"></textarea>
+            </div>
+          </div>
+          
+          <div>
+            <div class="form-group">
+              <label><i class="fas fa-chart-simple"></i> Max Clicks (optional)</label>
+              <input type="number" id="maxClicks" placeholder="Unlimited" min="1">
+            </div>
+            
+            <div class="form-group">
+              <label><i class="fas fa-hourglass-half"></i> Expires In</label>
+              <select id="expiresIn">
+                <option value="5m">5 minutes</option>
+                <option value="30m" selected>30 minutes</option>
+                <option value="1h">1 hour</option>
+                <option value="6h">6 hours</option>
+                <option value="24h">24 hours</option>
+                <option value="7d">7 days</option>
+                <option value="30d">30 days</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label><i class="fas fa-qrcode"></i> QR Code Options</label>
+              <div style="display: flex; gap: 1rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                  <input type="checkbox" id="generateQR"> Generate QR code
+                </label>
+                <select id="qrSize" disabled>
+                  <option value="200">Small</option>
+                  <option value="300" selected>Medium</option>
+                  <option value="400">Large</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+          <button onclick="generateLink()">
+            <i class="fas fa-magic"></i>
+            Generate Link
+          </button>
+          <button class="secondary" onclick="clearForm()">
+            <i class="fas fa-undo"></i>
+            Clear Form
+          </button>
+        </div>
+        
+        <div id="result" class="result-box" style="display:none">
+          <h3><i class="fas fa-check-circle" style="color:#48bb78"></i> Link Generated Successfully!</h3>
+          <div class="url-display">
+            <input type="text" id="generatedUrl" readonly>
+            <button class="secondary" onclick="copyToClipboard()">
+              <i class="fas fa-copy"></i> Copy
+            </button>
+            <button class="secondary" onclick="showQRFromResult()">
+              <i class="fas fa-qrcode"></i> QR Code
+            </button>
+          </div>
+          <div id="qrResult"></div>
+          <div style="margin-top: 1rem; padding: 1rem; background: #e3f2fd; border-radius: 8px;">
+            <p style="color: #1976d2; margin-bottom: 0.5rem;">
+              <i class="fas fa-info-circle"></i> Link Details:
+            </p>
+            <p><strong>ID:</strong> <span id="generatedId"></span></p>
+            <p><strong>Expires:</strong> <span id="generatedExpires"></span></p>
+            <p><strong>Password Protected:</strong> <span id="generatedPassword"></span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- All Links Tab -->
+    <div id="links" class="tab-content">
+      <div class="section">
+        <h2><i class="fas fa-list"></i> All Links</h2>
+        
+        <div style="margin-bottom: 1rem; display: flex; gap: 1rem;">
+          <input type="text" id="linkSearch" placeholder="Search links..." style="flex: 1;">
+          <select id="linkFilter">
+            <option value="all">All Links</option>
+            <option value="active">Active</option>
+            <option value="expired">Expired</option>
+            <option value="completed">Completed</option>
+          </select>
+          <button onclick="refreshLinks()">
+            <i class="fas fa-sync-alt"></i> Refresh
+          </button>
+        </div>
+        
+        <div style="overflow-x: auto;">
+          <table class="links-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Target URL</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>Clicks</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="linksTableBody">
+              <tr>
+                <td colspan="7" style="text-align: center; padding: 2rem;">
+                  <i class="fas fa-spinner fa-spin"></i> Loading links...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Analytics Tab -->
+    <div id="analytics" class="tab-content">
+      <div class="section">
+        <h2><i class="fas fa-chart-bar"></i> Link Analytics</h2>
+        
+        <div class="grid-2">
+          <div>
+            <div class="form-group">
+              <label><i class="fas fa-search"></i> Enter Link ID</label>
+              <input type="text" id="analyticsLinkId" placeholder="e.g., a1b2c3d4e5f6g7h8..." style="font-family: monospace;">
+            </div>
+            <button onclick="getLinkStats()">
+              <i class="fas fa-chart-line"></i> Get Statistics
+            </button>
+          </div>
+          
+          <div>
+            <div class="form-group">
+              <label><i class="fas fa-download"></i> Export Options</label>
+              <div style="display: flex; gap: 1rem;">
+                <button class="secondary" onclick="exportData('csv')">
+                  <i class="fas fa-file-csv"></i> Export CSV
+                </button>
+                <button class="secondary" onclick="exportData('json')">
+                  <i class="fas fa-file-code"></i> Export JSON
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div id="linkStats" class="result-box" style="display:none">
+          <h3><i class="fas fa-chart-pie"></i> Link Statistics</h3>
+          <div class="grid-3" id="statsContent"></div>
+          
+          <div style="margin-top: 2rem;">
+            <h4><i class="fas fa-history"></i> Recent Clicks</h4>
+            <div style="overflow-x: auto;">
+              <table class="links-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>IP</th>
+                    <th>Country</th>
+                    <th>Device</th>
+                  </tr>
+                </thead>
+                <tbody id="recentClicksTable"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Logs Tab -->
+    <div id="logs" class="tab-content">
+      <div class="section">
+        <h2><i class="fas fa-history"></i> Live Activity Logs</h2>
+        <div style="margin-bottom: 1rem; display: flex; gap: 1rem;">
+          <button class="secondary" onclick="clearLogs()">
+            <i class="fas fa-trash"></i> Clear Logs
+          </button>
+          <button class="secondary" onclick="exportLogs()">
+            <i class="fas fa-download"></i> Export Logs
+          </button>
+          <label style="display: flex; align-items: center; gap: 0.5rem;">
+            <input type="checkbox" id="autoScroll" checked> Auto-scroll
+          </label>
+        </div>
+        <div class="logs-container" id="logs"></div>
+      </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div id="settings" class="tab-content">
+      <div class="grid-2">
+        <div class="section">
+          <h2><i class="fas fa-database"></i> Cache Management</h2>
+          <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <button onclick="clearCache()" class="danger">
+              <i class="fas fa-trash-alt"></i> Clear All Caches
+            </button>
+            <button class="secondary" onclick="clearGeoCache()">
+              <i class="fas fa-globe"></i> Clear Geo Cache
+            </button>
+            <button class="secondary" onclick="clearQRCache()">
+              <i class="fas fa-qrcode"></i> Clear QR Cache
+            </button>
+          </div>
+          
+          <div style="margin-top: 2rem;">
+            <h3><i class="fas fa-chart-simple"></i> Cache Stats</h3>
+            <div class="stats-list">
+              <div class="stat-item">
+                <div class="label">Link Cache</div>
+                <div class="number" id="cacheLinks">0</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Geo Cache</div>
+                <div class="number" id="cacheGeo">0</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">QR Cache</div>
+                <div class="number" id="cacheQR">0</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="section">
+          <h2><i class="fas fa-sliders-h"></i> System Settings</h2>
+          
+          <div class="setting-item">
+            <span><i class="fas fa-hourglass-half"></i> Link TTL</span>
+            <select id="settingLinkTTL">
+              <option value="300">5 minutes</option>
+              <option value="1800" selected>30 minutes</option>
+              <option value="3600">1 hour</option>
+              <option value="21600">6 hours</option>
+              <option value="86400">24 hours</option>
+            </select>
+          </div>
+          
+          <div class="setting-item">
+            <span><i class="fas fa-shield-alt"></i> Desktop Challenge</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingDesktopChallenge" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          
+          <div class="setting-item">
+            <span><i class="fas fa-robot"></i> Bot Detection</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingBotDetection" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          
+          <div class="setting-item">
+            <span><i class="fas fa-chart-line"></i> Real-time Analytics</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settingAnalytics" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          
+          <button onclick="saveSettings()" style="margin-top: 1rem; width: 100%;">
+            <i class="fas fa-save"></i> Save Settings
+          </button>
+        </div>
+      </div>
+      
+      <div class="section">
+        <h2><i class="fas fa-info-circle"></i> System Information</h2>
+        <div class="system-status">
+          <div class="status-card">
+            <div class="title"><i class="fas fa-plug"></i> Socket Connection</div>
+            <div class="status connected" id="socketStatus">Connected</div>
+          </div>
+          <div class="status-card">
+            <div class="title"><i class="fas fa-database"></i> Database</div>
+            <div class="status {{dbPoolStatus}}" id="dbStatus">
+              {{dbPoolStatus === 'connected' ? 'Connected' : 'Disconnected'}}
+            </div>
+          </div>
+          <div class="status-card">
+            <div class="title"><i class="fas fa-memory"></i> Redis</div>
+            <div class="status {{redisStatus}}" id="redisStatus">
+              {{redisStatus === 'connected' ? 'Connected' : 'Disconnected'}}
+            </div>
+          </div>
+          <div class="status-card">
+            <div class="title"><i class="fas fa-tasks"></i> Queues</div>
+            <div class="status {{redirectQueueStatus}}">
+              {{redirectQueueStatus === 'connected' ? 'Active' : 'Inactive'}}
+            </div>
+          </div>
+        </div>
+        
+        <div style="margin-top: 2rem;">
+          <p><strong><i class="fas fa-code-branch"></i> Version:</strong> 3.0.0 Enterprise</p>
+          <p><strong><i class="fab fa-node"></i> Node.js:</strong> <span id="nodeVersion"></span></p>
+          <p><strong><i class="fas fa-laptop"></i> Platform:</strong> <span id="platform"></span></p>
+          <p><strong><i class="fas fa-microchip"></i> Memory Usage:</strong> <span id="memoryUsage"></span> MB</p>
+          <p><strong><i class="fas fa-clock"></i> Uptime:</strong> <span id="systemUptime"></span></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Link Details Modal -->
+  <div id="linkModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3><i class="fas fa-link"></i> Link Details</h3>
+        <span class="modal-close" onclick="closeModal()">&times;</span>
+      </div>
+      <div id="linkModalContent"></div>
+    </div>
+  </div>
+
+  <script>
+    // Server-side injected variables
+    const METRICS_API_KEY = '{{METRICS_API_KEY}}';
+    const TARGET_URL = '{{TARGET_URL}}';
+    const CSRF_TOKEN = '{{csrfToken}}';
+    
+    // Socket.IO connection
+    const socket = io({
+      auth: { token: METRICS_API_KEY },
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000
+    });
+    
+    let requestsChart, deviceChart;
+    let allLinks = [];
+    let autoScroll = true;
+    
+    // Socket event handlers
+    socket.on('connect', () => {
+      console.log('✅ Socket connected');
+      showAlert('Real-time monitoring connected', 'success');
+      document.getElementById('socketStatus').textContent = 'Connected';
+      document.getElementById('socketStatus').className = 'status connected';
+    });
+    
+    socket.on('disconnect', () => {
+      console.log('❌ Socket disconnected');
+      showAlert('Real-time monitoring disconnected', 'error');
+      document.getElementById('socketStatus').textContent = 'Disconnected';
+      document.getElementById('socketStatus').className = 'status disconnected';
+    });
+    
+    socket.on('stats', (data) => {
+      updateStats(data);
+      updateCharts(data);
+      updateCountryStats(data.byCountry);
+      updateCacheStats(data.caches);
+    });
+    
+    socket.on('log', (log) => {
+      addLogEntry(log);
+    });
+    
+    socket.on('link-generated', (link) => {
+      showAlert('New link generated: ' + link.id, 'info');
+      refreshLinks();
+    });
+    
+    socket.on('link-deleted', () => {
+      refreshLinks();
+    });
+    
+    socket.on('link-updated', () => {
+      refreshLinks();
+    });
+    
+    socket.on('links', (links) => {
+      allLinks = links;
+      renderLinksTable(links);
+    });
+    
+    socket.on('notification', (notification) => {
+      showAlert(notification.message, notification.type);
+    });
+    
+    // Update functions
+    function updateStats(data) {
+      document.getElementById('totalRequests').textContent = data.totalRequests?.toLocaleString() || '0';
+      document.getElementById('activeLinks').textContent = data.realtime?.activeLinks?.toLocaleString() || '0';
+      document.getElementById('botBlocks').textContent = data.botBlocks?.toLocaleString() || '0';
+      
+      const successRate = data.totalRequests ? 
+        ((data.successfulRedirects / data.totalRequests) * 100).toFixed(1) : 0;
+      document.getElementById('successRate').textContent = successRate + '%';
+    }
+    
+    function updateCacheStats(caches) {
+      if (caches) {
+        document.getElementById('cacheLinks').textContent = caches.linkReq?.toLocaleString() || '0';
+        document.getElementById('cacheGeo').textContent = caches.geo?.toLocaleString() || '0';
+        document.getElementById('cacheQR').textContent = caches.qr?.toLocaleString() || '0';
+      }
+    }
+    
+    function updateCharts(data) {
+      const ctx1 = document.getElementById('requestsChart').getContext('2d');
+      const ctx2 = document.getElementById('deviceChart').getContext('2d');
+      
+      if (requestsChart) requestsChart.destroy();
+      if (deviceChart) deviceChart.destroy();
+      
+      const lastMinute = data.realtime?.lastMinute || [];
+      const timestamps = lastMinute.map(d => {
+        const date = new Date(d.time);
+        return date.getHours() + ':' + date.getMinutes().toString().padStart(2, '0') + ':' + date.getSeconds().toString().padStart(2, '0');
+      });
+      const requests = lastMinute.map(d => d.requests || 0);
+      const blocks = lastMinute.map(d => d.blocks || 0);
+      const successes = lastMinute.map(d => d.successes || 0);
+      
+      requestsChart = new Chart(ctx1, {
+        type: 'line',
+        data: {
+          labels: timestamps,
+          datasets: [
+            {
+              label: 'Requests',
+              data: requests,
+              borderColor: '#667eea',
+              backgroundColor: 'rgba(102,126,234,0.1)',
+              tension: 0.4,
+              fill: true
+            },
+            {
+              label: 'Successful',
+              data: successes,
+              borderColor: '#48bb78',
+              backgroundColor: 'rgba(72,187,120,0.1)',
+              tension: 0.4,
+              fill: true
+            },
+            {
+              label: 'Blocks',
+              data: blocks,
+              borderColor: '#f56565',
+              backgroundColor: 'rgba(245,101,101,0.1)',
+              tension: 0.4,
+              fill: true
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { position: 'top' } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
+            x: { grid: { display: false } }
+          }
+        }
+      });
+      
+      deviceChart = new Chart(ctx2, {
+        type: 'doughnut',
+        data: {
+          labels: ['Mobile', 'Desktop', 'Tablet', 'Bot'],
+          datasets: [{
+            data: [
+              data.byDevice?.mobile || 0,
+              data.byDevice?.desktop || 0,
+              data.byDevice?.tablet || 0,
+              data.byDevice?.bot || 0
+            ],
+            backgroundColor: ['#48bb78', '#4299e1', '#ed8936', '#f56565'],
+            borderWidth: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } },
+          cutout: '60%'
+        }
+      });
+    }
+    
+    function updateCountryStats(countries) {
+      const container = document.getElementById('countryStats');
+      if (!countries || Object.keys(countries).length === 0) {
+        container.innerHTML = '<div class="stat-item"><div class="label">No data yet</div></div>';
+        return;
+      }
+      
+      const sorted = Object.entries(countries)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8);
+      
+      container.innerHTML = sorted.map(([country, count]) => `
+        <div class="stat-item">
+          <div class="label">${country}</div>
+          <div class="number">${count.toLocaleString()}</div>
+        </div>
+      `).join('');
+    }
+    
+    function addLogEntry(log) {
+      const logs = document.getElementById('logs');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      
+      const time = new Date(log.t).toLocaleTimeString();
+      const device = log.device || 'unknown';
+      let emoji = '🌐';
+      if (device === 'mobile') emoji = '📱';
+      else if (device === 'tablet') emoji = '📟';
+      else if (device === 'bot') emoji = '🤖';
+      
+      entry.innerHTML = `[${time}] ${emoji} ${log.ip} ${log.method} ${log.path} [${device}] ${log.duration}ms`;
+      
+      logs.insertBefore(entry, logs.firstChild);
+      if (logs.children.length > 200) logs.removeChild(logs.lastChild);
+      
+      if (document.getElementById('autoScroll').checked) {
+        logs.scrollTop = 0;
+      }
+    }
+    
+    function clearLogs() {
+      document.getElementById('logs').innerHTML = '';
+      showAlert('Logs cleared', 'success');
+    }
+    
+    function renderLinksTable(links) {
+      const tbody = document.getElementById('linksTableBody');
+      
+      if (!links || links.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="7" style="text-align: center; padding: 2rem;">
+              <i class="fas fa-link"></i> No links found
+            </td>
+          </tr>
+        `;
+        return;
+      }
+      
+      const filter = document.getElementById('linkFilter').value;
+      const search = document.getElementById('linkSearch').value.toLowerCase();
+      
+      const filtered = links.filter(link => {
+        if (filter !== 'all' && link.status !== filter) return false;
+        if (search && !link.id.toLowerCase().includes(search) && !link.target_url.toLowerCase().includes(search)) return false;
+        return true;
+      });
+      
+      tbody.innerHTML = filtered.map(link => `
+        <tr>
+          <td><code>${link.id.substring(0, 8)}...</code></td>
+          <td><a href="${link.target_url}" target="_blank" rel="noopener">${link.target_url.substring(0, 30)}...</a></td>
+          <td>${new Date(link.created_at).toLocaleString()}</td>
+          <td>${new Date(link.expires_at).toLocaleString()}</td>
+          <td>${link.current_clicks || 0}${link.max_clicks ? '/' + link.max_clicks : ''}</td>
+          <td><span class="badge ${link.status}">${link.status}</span></td>
+          <td class="action-buttons">
+            <button onclick="viewLink('${link.id}')" title="View Details">
+              <i class="fas fa-eye"></i>
+            </button>
+            <button class="secondary" onclick="copyLink('${link.id}')" title="Copy Link">
+              <i class="fas fa-copy"></i>
+            </button>
+            <button class="danger" onclick="deleteLink('${link.id}')" title="Delete">
+              <i class="fas fa-trash"></i>
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+    
+    async function generateLink() {
+      const url = document.getElementById('targetUrl').value;
+      const password = document.getElementById('linkPassword').value;
+      const maxClicks = document.getElementById('maxClicks').value;
+      const expiresIn = document.getElementById('expiresIn').value;
+      const notes = document.getElementById('linkNotes').value;
+      const generateQR = document.getElementById('generateQR')?.checked || false;
+      
+      if (!url) {
+        showAlert('Please enter a URL', 'error');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ 
+            url, 
+            password: password || undefined,
+            maxClicks: maxClicks ? parseInt(maxClicks) : undefined,
+            expiresIn,
+            notes
+          }),
+          credentials: 'include'
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('generatedUrl').value = data.url;
+          document.getElementById('generatedId').textContent = data.id;
+          document.getElementById('generatedExpires').textContent = data.expires_human;
+          document.getElementById('generatedPassword').textContent = data.passwordProtected ? 'Yes' : 'No';
+          document.getElementById('result').style.display = 'block';
+          
+          if (generateQR) {
+            const size = document.getElementById('qrSize').value;
+            await showQRForUrl(data.url, size);
+          }
+          
+          showAlert('Link generated successfully!', 'success');
+          refreshLinks();
+        } else {
+          const error = await res.json();
+          showAlert(error.error || 'Failed to generate link', 'error');
+        }
+      } catch (err) {
+        showAlert('Network error: ' + err.message, 'error');
+      }
+    }
+    
+    async function showQRForUrl(url, size = 300) {
+      try {
+        const res = await fetch('/qr?url=' + encodeURIComponent(url) + '&size=' + size);
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('qrResult').innerHTML = `
+            <h4>QR Code:</h4>
+            <img src="${data.qr}" alt="QR Code" style="max-width: 200px;">
+            <div style="margin-top: 1rem;">
+              <button class="secondary" onclick="downloadQR('${url}', ${size})">
+                <i class="fas fa-download"></i> Download PNG
+              </button>
+            </div>
+          `;
+        }
+      } catch (err) {
+        showAlert('Failed to generate QR code', 'error');
+      }
+    }
+    
+    async function downloadQR(url, size) {
+      window.location.href = '/qr/download?url=' + encodeURIComponent(url) + '&size=' + size;
+    }
+    
+    function showQRFromResult() {
+      const url = document.getElementById('generatedUrl').value;
+      const size = document.getElementById('qrSize')?.value || 300;
+      showQRForUrl(url, size);
+    }
+    
+    async function getLinkStats() {
+      const linkId = document.getElementById('analyticsLinkId').value;
+      if (!linkId) {
+        showAlert('Please enter a link ID', 'error');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/stats/' + linkId);
+        if (res.ok) {
+          const stats = await res.json();
+          document.getElementById('linkStats').style.display = 'block';
+          
+          let statsHtml = '';
+          if (stats.exists) {
+            statsHtml = `
+              <div class="stat-item">
+                <div class="label">Total Clicks</div>
+                <div class="number">${stats.clicks || 0}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Unique Visitors</div>
+                <div class="number">${stats.uniqueVisitors || 0}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Max Clicks</div>
+                <div class="number">${stats.maxClicks || '∞'}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Created</div>
+                <div class="number" style="font-size:1rem">${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Expires</div>
+                <div class="number" style="font-size:1rem">${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</div>
+              </div>
+              <div class="stat-item">
+                <div class="label">Password Protected</div>
+                <div class="number" style="font-size:1rem">${stats.passwordProtected ? 'Yes' : 'No'}</div>
+              </div>
+            `;
+            
+            // Recent clicks table
+            const recentHtml = stats.recentClicks?.map(click => `
+              <tr>
+                <td>${new Date(click.created_at).toLocaleString()}</td>
+                <td>${click.ip}</td>
+                <td>${click.country || 'XX'}</td>
+                <td>${click.device_type || 'unknown'}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="4" style="text-align: center;">No clicks yet</td></tr>';
+            
+            document.getElementById('recentClicksTable').innerHTML = recentHtml;
+          } else {
+            statsHtml = '<div class="stat-item"><div class="label">Link not found or expired</div></div>';
+            document.getElementById('recentClicksTable').innerHTML = '';
+          }
+          
+          document.getElementById('statsContent').innerHTML = statsHtml;
+        }
+      } catch (err) {
+        showAlert('Failed to get statistics', 'error');
+      }
+    }
+    
+    async function viewLink(linkId) {
+      try {
+        const res = await fetch('/api/stats/' + linkId);
+        if (res.ok) {
+          const stats = await res.json();
+          
+          const modalContent = `
+            <p><strong>ID:</strong> <code>${linkId}</code></p>
+            <p><strong>Target URL:</strong> <a href="${stats.target_url}" target="_blank">${stats.target_url}</a></p>
+            <p><strong>Created:</strong> ${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</p>
+            <p><strong>Expires:</strong> ${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</p>
+            <p><strong>Clicks:</strong> ${stats.clicks || 0}${stats.maxClicks ? '/' + stats.maxClicks : ''}</p>
+            <p><strong>Unique Visitors:</strong> ${stats.uniqueVisitors || 0}</p>
+            <p><strong>Password Protected:</strong> ${stats.passwordProtected ? 'Yes' : 'No'}</p>
+            <p><strong>Notes:</strong> ${stats.notes || 'None'}</p>
+            
+            <h4 style="margin-top: 1rem;">Country Distribution</h4>
+            <div style="max-height: 200px; overflow-y: auto;">
+              ${Object.entries(stats.countries || {}).map(([country, count]) => `
+                <div style="display: flex; justify-content: space-between; padding: 0.25rem 0;">
+                  <span>${country}</span>
+                  <span>${count}</span>
+                </div>
+              `).join('')}
+            </div>
+            
+            <div style="margin-top: 1rem; display: flex; gap: 1rem;">
+              <button onclick="copyLink('${linkId}')">
+                <i class="fas fa-copy"></i> Copy Link
+              </button>
+              <button class="secondary" onclick="showQRForUrl('${document.location.origin}/v/${linkId}')">
+                <i class="fas fa-qrcode"></i> Generate QR
+              </button>
+              <button class="danger" onclick="deleteLink('${linkId}')">
+                <i class="fas fa-trash"></i> Delete
+              </button>
+            </div>
+          `;
+          
+          document.getElementById('linkModalContent').innerHTML = modalContent;
+          document.getElementById('linkModal').classList.add('active');
+        }
+      } catch (err) {
+        showAlert('Failed to load link details', 'error');
+      }
+    }
+    
+    function copyLink(linkId) {
+      const url = document.location.origin + '/v/' + linkId;
+      navigator.clipboard.writeText(url);
+      showAlert('Link copied to clipboard!', 'success');
+    }
+    
+    async function deleteLink(linkId) {
+      if (!confirm('Are you sure you want to delete this link?')) {
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/links/' + linkId, {
+          method: 'DELETE',
+          headers: {
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          credentials: 'include'
+        });
+        
+        if (res.ok) {
+          showAlert('Link deleted successfully', 'success');
+          refreshLinks();
+          closeModal();
+        } else {
+          showAlert('Failed to delete link', 'error');
+        }
+      } catch (err) {
+        showAlert('Network error', 'error');
+      }
+    }
+    
+    function refreshLinks() {
+      socket.emit('command', { action: 'getLinks' });
+    }
+    
+    function clearForm() {
+      document.getElementById('targetUrl').value = TARGET_URL;
+      document.getElementById('linkPassword').value = '';
+      document.getElementById('maxClicks').value = '';
+      document.getElementById('linkNotes').value = '';
+      document.getElementById('expiresIn').value = '30m';
+      document.getElementById('result').style.display = 'none';
+      document.getElementById('qrResult').innerHTML = '';
+    }
+    
+    async function clearCache() {
+      if (!confirm('Are you sure you want to clear all caches? This may temporarily affect performance.')) {
+        return;
+      }
+      
+      try {
+        const res = await fetch('/admin/clear-cache', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify({ _csrf: CSRF_TOKEN }),
+          credentials: 'include'
+        });
+        
+        if (res.ok) {
+          showAlert('Cache cleared successfully', 'success');
+        } else {
+          showAlert('Failed to clear cache', 'error');
+        }
+      } catch (err) {
+        showAlert('Network error', 'error');
+      }
+    }
+    
+    async function clearGeoCache() {
+      socket.emit('command', { action: 'clearGeoCache' });
+    }
+    
+    async function clearQRCache() {
+      socket.emit('command', { action: 'clearQRCache' });
+    }
+    
+    function exportLogs() {
+      window.location.href = '/admin/export-logs';
+    }
+    
+    function exportData(format) {
+      const linkId = document.getElementById('analyticsLinkId').value;
+      if (!linkId) {
+        showAlert('Please enter a link ID', 'error');
+        return;
+      }
+      
+      window.location.href = `/api/export/${linkId}?format=${format}`;
+    }
+    
+    function copyToClipboard() {
+      const url = document.getElementById('generatedUrl');
+      url.select();
+      document.execCommand('copy');
+      showAlert('Copied to clipboard!', 'success');
+    }
+    
+    function showAlert(message, type) {
+      const alert = document.getElementById('alert');
+      alert.className = 'alert ' + type;
+      alert.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'}"></i> ${message}`;
+      alert.style.display = 'block';
+      
+      setTimeout(() => {
+        alert.style.display = 'none';
+      }, 3000);
+    }
+    
+    function showTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      
+      document.querySelector(`.tab[onclick="showTab('${tab}')"]`).classList.add('active');
+      document.getElementById(tab).classList.add('active');
+      
+      if (tab === 'links') {
+        refreshLinks();
+      }
+    }
+    
+    function closeModal() {
+      document.getElementById('linkModal').classList.remove('active');
+    }
+    
+    function logout() {
+      fetch('/admin/logout', {
+        method: 'POST',
+        credentials: 'include'
+      }).then(() => {
+        window.location.href = '/admin/login';
+      });
+    }
+    
+    function saveSettings() {
+      const settings = {
+        linkTTL: parseInt(document.getElementById('settingLinkTTL').value),
+        desktopChallenge: document.getElementById('settingDesktopChallenge').checked,
+        botDetection: document.getElementById('settingBotDetection').checked,
+        analytics: document.getElementById('settingAnalytics').checked
+      };
+      
+      showAlert('Settings saved (some changes may require restart)', 'success');
+    }
+    
+    // Update system info
+    function updateSystemInfo() {
+      fetch('/health')
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById('nodeVersion').textContent = window.navigator.userAgent.includes('Node') ? 'Embedded' : 'Browser';
+          document.getElementById('platform').textContent = window.navigator.platform;
+          document.getElementById('memoryUsage').textContent = Math.round(data.memory?.rss / 1024 / 1024) || '0';
+        })
+        .catch(() => {});
+    }
+    
+    // Update uptime
+    setInterval(() => {
+      const uptime = Math.floor(process.uptime?.() || 0);
+      const hours = Math.floor(uptime / 3600);
+      const minutes = Math.floor((uptime % 3600) / 60);
+      const seconds = uptime % 60;
+      document.getElementById('uptimeValue').textContent = `${hours}h ${minutes}m ${seconds}s`;
+      document.getElementById('systemUptime').textContent = `${hours}h ${minutes}m ${seconds}s`;
+    }, 1000);
+    
+    // Search and filter listeners
+    document.getElementById('linkSearch').addEventListener('input', () => {
+      renderLinksTable(allLinks);
+    });
+    
+    document.getElementById('linkFilter').addEventListener('change', () => {
+      renderLinksTable(allLinks);
+    });
+    
+    // Generate QR checkbox toggle
+    document.getElementById('generateQR')?.addEventListener('change', function() {
+      document.getElementById('qrSize').disabled = !this.checked;
+    });
+    
+    // Auto-scroll checkbox
+    document.getElementById('autoScroll').addEventListener('change', function() {
+      autoScroll = this.checked;
+    });
+    
+    // Initial data load
+    socket.emit('command', { action: 'getStats' });
+    socket.emit('command', { action: 'getLinks' });
+    updateSystemInfo();
+    
+    // Check if queues tab should be shown
+    if (document.querySelector('#queuesTab').style.display === 'none') {
+      // Check if queues are enabled
+      fetch('/health')
+        .then(res => res.json())
+        .then(data => {
+          if (data.queues?.redirect === 'ready') {
+            document.querySelector('#queuesTab').style.display = 'flex';
+          }
+        });
+    }
+    
+    // Close modal on outside click
+    window.onclick = function(event) {
+      const modal = document.getElementById('linkModal');
+      if (event.target === modal) {
+        closeModal();
+      }
+    }
+  </script>
+</body>
+</html>
