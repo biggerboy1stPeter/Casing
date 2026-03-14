@@ -22,10 +22,10 @@
     "pm2:save": "pm2 save",
     "pm2:startup": "pm2 startup",
     
-    "secrets": "node scripts/generate-secrets.js",
-    "secrets:write": "node scripts/generate-secrets.js --write",
-    "secrets:force": "node scripts/generate-secrets.js --force --write",
-    "secrets:rotate": "node scripts/rotate-secrets.js",
+    "secrets": "node generate-secrets.js",
+    "secrets:write": "node generate-secrets.js --write",
+    "secrets:force": "node generate-secrets.js --force --write",
+    "secrets:rotate": "node rotate-secrets.js",
     
     "db:migrate": "node scripts/migrate.js",
     "db:migrate:create": "node scripts/create-migration.js",
