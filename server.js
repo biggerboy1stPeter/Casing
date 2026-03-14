@@ -505,15 +505,20 @@ let subscriber;
 let sessionStore;
 let rateLimiterRedis;
 
-if (CONFIG.REDIS_URL && CONFIG.REDIS_URL.startsWith('redis://')) {
+// Only attempt Redis connection if a valid URL is provided
+if (CONFIG.REDIS_URL && CONFIG.REDIS_URL.startsWith('redis://') && CONFIG.REDIS_URL !== 'redis://') {
   try {
     redisClient = new Redis(CONFIG.REDIS_URL, {
       retryStrategy: (times) => {
         const delay = Math.min(times * 100, 3000);
+        if (times > 10) {
+          logger.warn(`Redis connection retry ${times} - stopping retries`);
+          return null; // Stop retrying after 10 attempts
+        }
         logger.warn(`Redis connection retry ${times} with delay ${delay}ms`);
         return delay;
       },
-      maxRetriesPerRequest: 5,
+      maxRetriesPerRequest: 3,
       enableReadyCheck: true,
       lazyConnect: false,
       connectTimeout: 10000,
@@ -521,12 +526,15 @@ if (CONFIG.REDIS_URL && CONFIG.REDIS_URL.startsWith('redis://')) {
       commandTimeout: 5000,
       keepAlive: 30000,
       family: 4,
-      db: CONFIG.REDIS_DB,
+      db: CONFIG.REDIS_DB || 0,
       password: CONFIG.REDIS_PASSWORD || undefined
     });
 
     subscriber = new Redis(CONFIG.REDIS_URL, {
-      retryStrategy: (times) => Math.min(times * 100, 3000),
+      retryStrategy: (times) => {
+        if (times > 5) return null;
+        return Math.min(times * 100, 3000);
+      },
       maxRetriesPerRequest: 3,
       enableReadyCheck: true,
       lazyConnect: false
@@ -581,6 +589,8 @@ if (CONFIG.REDIS_URL && CONFIG.REDIS_URL.startsWith('redis://')) {
       inMemoryBlockDuration: 10
     });
 
+    logger.info('✅ Redis session store and rate limiter initialized');
+
   } catch (err) {
     logger.warn('Redis connection failed, using fallback stores:', err.message);
     sessionStore = new session.MemoryStore();
@@ -589,7 +599,7 @@ if (CONFIG.REDIS_URL && CONFIG.REDIS_URL.startsWith('redis://')) {
     rateLimiterRedis = null;
   }
 } else {
-  logger.warn('⚠️ Redis not configured - using MemoryStore and Memory rate limiter');
+  logger.info('📁 Redis not configured - using MemoryStore and Memory rate limiter');
   sessionStore = new session.MemoryStore();
 }
 
