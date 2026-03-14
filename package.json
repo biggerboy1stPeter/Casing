@@ -161,10 +161,7 @@
     "cluster:start": "pm2 start cluster.js -i max",
     
     "env:example": "cp .env.example .env",
-    "env:validate": "node scripts/validate-env.js --strict",
-    
-    "postinstall": "node scripts/postinstall.js",
-    "preuninstall": "node scripts/preuninstall.js"
+    "env:validate": "node scripts/validate-env.js --strict"
   },
   "keywords": [
     "redirect", 
