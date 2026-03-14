@@ -3,11 +3,11 @@
 <head>
   <title>Redirector Pro | Enterprise Command Center</title>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-  <meta name="theme-color" content="#000000">
-  <meta name="color-scheme" content="dark">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="color-scheme" content="light dark">
   <!-- Disable source maps to prevent CSP errors -->
-  <meta http-equiv="Content-Security-Policy" content="connect-src 'self' ws: wss: https://cdn.socket.io https://cdn.jsdelivr.net;">
+  <meta http-equiv="Content-Security-Policy" content="connect-src 'self' ws: wss:;">
   
   <!-- Fonts & Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -22,49 +22,49 @@
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
   
   <style>
-    /* CSS Variables for Dark Theming */
+    /* CSS Variables for Theming */
     :root {
-      /* Colors - Dark Theme */
-      --primary-50: #1a1a1a;
-      --primary-100: #2a2a2a;
-      --primary-200: #3a3a3a;
-      --primary-300: #4a4a4a;
-      --primary-400: #5a5a5a;
-      --primary-500: #6a6a6a;
-      --primary-600: #7a7a7a;
-      --primary-700: #8a8a8a;
-      --primary-800: #9a9a9a;
-      --primary-900: #aaaaaa;
+      /* Colors */
+      --primary-50: #eef2ff;
+      --primary-100: #e0e7ff;
+      --primary-200: #c7d2fe;
+      --primary-300: #a5b4fc;
+      --primary-400: #818cf8;
+      --primary-500: #6366f1;
+      --primary-600: #4f46e5;
+      --primary-700: #4338ca;
+      --primary-800: #3730a3;
+      --primary-900: #312e81;
       
-      /* Neutral Colors - Dark */
-      --neutral-50: #0a0a0a;
-      --neutral-100: #121212;
-      --neutral-200: #1a1a1a;
-      --neutral-300: #222222;
-      --neutral-400: #2a2a2a;
-      --neutral-500: #3a3a3a;
-      --neutral-600: #4a4a4a;
-      --neutral-700: #5a5a5a;
-      --neutral-800: #6a6a6a;
-      --neutral-900: #7a7a7a;
+      /* Neutral Colors */
+      --neutral-50: #fafafa;
+      --neutral-100: #f4f4f5;
+      --neutral-200: #e4e4e7;
+      --neutral-300: #d4d4d8;
+      --neutral-400: #a1a1aa;
+      --neutral-500: #71717a;
+      --neutral-600: #52525b;
+      --neutral-700: #3f3f46;
+      --neutral-800: #27272a;
+      --neutral-900: #18181b;
       
       /* Semantic Colors */
-      --success-50: #132b1a;
-      --success-500: #4ade80;
-      --success-600: #22c55e;
-      --success-700: #16a34a;
+      --success-50: #f0fdf4;
+      --success-500: #22c55e;
+      --success-600: #16a34a;
+      --success-700: #15803d;
       
-      --warning-50: #332614;
+      --warning-50: #fffbeb;
       --warning-500: #f59e0b;
       --warning-600: #d97706;
       --warning-700: #b45309;
       
-      --error-50: #2f1a1a;
+      --error-50: #fef2f2;
       --error-500: #ef4444;
       --error-600: #dc2626;
       --error-700: #b91c1c;
       
-      --info-50: #1a2633;
+      --info-50: #eff6ff;
       --info-500: #3b82f6;
       --info-600: #2563eb;
       
@@ -94,10 +94,10 @@
       --radius-full: 9999px;
       
       /* Shadows */
-      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.5);
-      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.6);
-      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.7);
-      --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.8);
+      --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+      --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+      --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+      --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
       
       /* Transitions */
       --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -108,6 +108,22 @@
       --sidebar-width: 280px;
       --header-height: 64px;
       --container-max-width: 1440px;
+    }
+    
+    /* Dark Mode */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --neutral-50: #18181b;
+        --neutral-100: #27272a;
+        --neutral-200: #3f3f46;
+        --neutral-300: #52525b;
+        --neutral-400: #71717a;
+        --neutral-500: #a1a1aa;
+        --neutral-600: #d4d4d8;
+        --neutral-700: #e4e4e7;
+        --neutral-800: #f4f4f5;
+        --neutral-900: #fafafa;
+      }
     }
     
     /* Reset & Base */
@@ -121,8 +137,8 @@
       font-family: var(--font-family);
       font-size: var(--font-size-md);
       line-height: 1.5;
-      color: #ddd;
-      background: #000;
+      color: var(--neutral-900);
+      background: var(--neutral-100);
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
@@ -140,10 +156,9 @@
       top: 0;
       z-index: 40;
       height: var(--header-height);
-      background: #0a0a0a;
+      background: linear-gradient(135deg, var(--primary-600), var(--primary-800));
       color: white;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.8);
-      border-bottom: 1px solid #1a1a1a;
+      box-shadow: var(--shadow-md);
     }
     
     .header-content {
@@ -162,12 +177,10 @@
       gap: var(--spacing-sm);
       font-weight: 600;
       font-size: var(--font-size-lg);
-      color: #e0e0e0;
     }
     
     .logo i {
       font-size: var(--font-size-xl);
-      color: #8a8a8a;
     }
     
     .header-actions {
@@ -181,30 +194,27 @@
       align-items: center;
       gap: var(--spacing-xs);
       font-size: var(--font-size-sm);
-      background: rgba(255, 255, 255, 0.05);
+      background: rgba(255, 255, 255, 0.1);
       padding: var(--spacing-xs) var(--spacing-sm);
       border-radius: var(--radius-full);
       backdrop-filter: blur(4px);
-      border: 1px solid #222;
-      color: #aaa;
     }
     
     /* Mobile Menu Button */
     .menu-toggle {
       display: none;
       background: none;
-      border: 1px solid #222;
-      color: #aaa;
+      border: none;
+      color: white;
       font-size: var(--font-size-xl);
       cursor: pointer;
       padding: var(--spacing-sm);
       border-radius: var(--radius-md);
-      transition: all var(--transition-fast);
+      transition: background var(--transition-fast);
     }
     
     .menu-toggle:hover {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: #333;
+      background: rgba(255, 255, 255, 0.1);
     }
     
     /* Main Container */
@@ -215,38 +225,19 @@
       margin: 0 auto;
       width: 100%;
       position: relative;
-      background: #000;
     }
     
     /* Sidebar */
     .sidebar {
       width: var(--sidebar-width);
-      background: #0a0a0a;
-      border-right: 1px solid #1a1a1a;
+      background: var(--neutral-50);
+      border-right: 1px solid var(--neutral-200);
       height: calc(100vh - var(--header-height));
       position: sticky;
       top: var(--header-height);
       overflow-y: auto;
       transition: transform var(--transition-base);
       z-index: 30;
-    }
-    
-    /* Scrollbar Styling */
-    .sidebar::-webkit-scrollbar {
-      width: 6px;
-    }
-    
-    .sidebar::-webkit-scrollbar-track {
-      background: rgba(255,255,255,0.05);
-    }
-    
-    .sidebar::-webkit-scrollbar-thumb {
-      background: rgba(255,255,255,0.2);
-      border-radius: 10px;
-    }
-    
-    .sidebar::-webkit-scrollbar-thumb:hover {
-      background: rgba(255,255,255,0.3);
     }
     
     .sidebar-nav {
@@ -260,13 +251,12 @@
       padding: var(--spacing-md) var(--spacing-lg);
       margin-bottom: var(--spacing-xs);
       border-radius: var(--radius-lg);
-      color: #888;
+      color: var(--neutral-600);
       font-weight: 500;
       cursor: pointer;
       transition: all var(--transition-fast);
       position: relative;
       overflow: hidden;
-      border: 1px solid transparent;
     }
     
     .nav-item i {
@@ -275,16 +265,13 @@
     }
     
     .nav-item:hover {
-      background: #1a1a1a;
-      color: #b0b0b0;
-      border-color: #2a2a2a;
+      background: var(--neutral-200);
+      color: var(--primary-600);
     }
     
     .nav-item.active {
-      background: #1a1a1a;
-      color: #e0e0e0;
-      border-color: #3a3a3a;
-      box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
+      background: var(--primary-50);
+      color: var(--primary-700);
     }
     
     .nav-item.active::before {
@@ -294,7 +281,7 @@
       top: 0;
       bottom: 0;
       width: 4px;
-      background: linear-gradient(90deg, #8a8a8a, #4a4a4a);
+      background: var(--primary-600);
       border-radius: 0 var(--radius-full) var(--radius-full) 0;
     }
     
@@ -304,7 +291,6 @@
       padding: var(--spacing-lg);
       overflow-y: auto;
       min-width: 0; /* Prevents flex overflow */
-      background: #000;
     }
     
     /* Tab Content */
@@ -331,11 +317,11 @@
     }
     
     .stat-card {
-      background: #0a0a0a;
+      background: var(--neutral-50);
       border-radius: var(--radius-xl);
       padding: var(--spacing-lg);
       box-shadow: var(--shadow-sm);
-      border: 1px solid #1a1a1a;
+      border: 1px solid var(--neutral-200);
       transition: all var(--transition-base);
       position: relative;
       overflow: hidden;
@@ -348,7 +334,7 @@
       left: 0;
       right: 0;
       height: 4px;
-      background: linear-gradient(90deg, #4a4a4a, #2a2a2a);
+      background: linear-gradient(90deg, var(--primary-400), var(--primary-600));
       opacity: 0;
       transition: opacity var(--transition-base);
     }
@@ -356,7 +342,7 @@
     .stat-card:hover {
       transform: translateY(-2px);
       box-shadow: var(--shadow-lg);
-      border-color: #2a2a2a;
+      border-color: var(--primary-200);
     }
     
     .stat-card:hover::after {
@@ -375,26 +361,25 @@
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      color: #666;
+      color: var(--neutral-500);
     }
     
     .stat-icon {
       width: 40px;
       height: 40px;
       border-radius: var(--radius-lg);
-      background: #1a1a1a;
-      color: #888;
+      background: var(--primary-50);
+      color: var(--primary-600);
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: var(--font-size-xl);
-      border: 1px solid #2a2a2a;
     }
     
     .stat-value {
       font-size: var(--font-size-3xl);
       font-weight: 700;
-      color: #e0e0e0;
+      color: var(--neutral-900);
       line-height: 1.2;
       margin-bottom: var(--spacing-xs);
     }
@@ -404,11 +389,11 @@
       align-items: center;
       gap: var(--spacing-xs);
       font-size: var(--font-size-sm);
-      color: #666;
+      color: var(--neutral-500);
     }
     
-    .trend-up { color: var(--success-500); }
-    .trend-down { color: var(--error-500); }
+    .trend-up { color: var(--success-600); }
+    .trend-down { color: var(--error-600); }
     
     /* Charts Grid */
     .charts-grid {
@@ -419,11 +404,11 @@
     }
     
     .chart-card {
-      background: #0a0a0a;
+      background: var(--neutral-50);
       border-radius: var(--radius-xl);
       padding: var(--spacing-lg);
       box-shadow: var(--shadow-sm);
-      border: 1px solid #1a1a1a;
+      border: 1px solid var(--neutral-200);
     }
     
     .chart-header {
@@ -436,7 +421,7 @@
     .chart-title {
       font-size: var(--font-size-lg);
       font-weight: 600;
-      color: #ccc;
+      color: var(--neutral-800);
     }
     
     .chart-container {
@@ -446,11 +431,11 @@
     
     /* Section Cards */
     .section-card {
-      background: #0a0a0a;
+      background: var(--neutral-50);
       border-radius: var(--radius-xl);
       padding: var(--spacing-xl);
       box-shadow: var(--shadow-sm);
-      border: 1px solid #1a1a1a;
+      border: 1px solid var(--neutral-200);
       margin-bottom: var(--spacing-xl);
     }
     
@@ -466,7 +451,7 @@
     .section-title {
       font-size: var(--font-size-xl);
       font-weight: 600;
-      color: #ccc;
+      color: var(--neutral-800);
       display: flex;
       align-items: center;
       gap: var(--spacing-sm);
@@ -487,7 +472,7 @@
       display: block;
       font-size: var(--font-size-sm);
       font-weight: 600;
-      color: #888;
+      color: var(--neutral-700);
       margin-bottom: var(--spacing-xs);
     }
     
@@ -496,27 +481,25 @@
       padding: var(--spacing-md) var(--spacing-lg);
       font-size: var(--font-size-md);
       font-family: var(--font-family);
-      color: #eee;
-      background: rgba(20,20,20,0.7);
-      border: 1px solid #222;
-      border-radius: 12px;
+      color: var(--neutral-900);
+      background: var(--neutral-50);
+      border: 2px solid var(--neutral-200);
+      border-radius: var(--radius-lg);
       transition: all var(--transition-fast);
-      backdrop-filter: blur(4px);
     }
     
     .form-control:hover {
-      border-color: #333;
+      border-color: var(--neutral-300);
     }
     
     .form-control:focus {
       outline: none;
-      border-color: #555;
-      background: rgba(30,30,30,0.8);
-      box-shadow: 0 0 0 3px rgba(80,80,80,0.2);
+      border-color: var(--primary-500);
+      box-shadow: 0 0 0 3px var(--primary-100);
     }
     
     .form-control::placeholder {
-      color: #444;
+      color: var(--neutral-400);
     }
     
     textarea.form-control {
@@ -535,13 +518,11 @@
       font-weight: 600;
       line-height: 1;
       color: white;
-      background: linear-gradient(90deg, #5a5a5a 0%, #8c8c8c 50%, #5a5a5a 100%);
+      background: linear-gradient(135deg, var(--primary-600), var(--primary-700));
       border: none;
-      border-radius: 14px;
+      border-radius: var(--radius-lg);
       cursor: pointer;
-      transition: all 0.3s;
-      box-shadow: 0 6px 20px rgba(0,0,0,0.5);
-      background-size: 200% 100%;
+      transition: all var(--transition-base);
       position: relative;
       overflow: hidden;
     }
@@ -565,9 +546,8 @@
     }
     
     .btn:hover {
-      background-position: 100% 0;
       transform: translateY(-2px);
-      box-shadow: 0 12px 35px rgba(100,100,100,0.3);
+      box-shadow: var(--shadow-lg);
     }
     
     .btn:active {
@@ -575,22 +555,20 @@
     }
     
     .btn-secondary {
-      background: #1a1a1a;
-      color: #aaa;
-      border: 1px solid #2a2a2a;
+      background: var(--neutral-200);
+      color: var(--neutral-700);
     }
     
     .btn-secondary:hover {
-      background: #222;
-      color: #ccc;
+      background: var(--neutral-300);
     }
     
     .btn-success {
-      background: linear-gradient(90deg, #2e7d32, #4caf50);
+      background: linear-gradient(135deg, var(--success-500), var(--success-600));
     }
     
     .btn-danger {
-      background: linear-gradient(90deg, #c62828, #ef5350);
+      background: linear-gradient(135deg, var(--error-500), var(--error-600));
     }
     
     .btn-sm {
@@ -608,36 +586,36 @@
     .table-container {
       overflow-x: auto;
       border-radius: var(--radius-lg);
-      border: 1px solid #1a1a1a;
-      background: #0a0a0a;
+      border: 1px solid var(--neutral-200);
+      background: var(--neutral-50);
     }
     
     .table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 800px;
+      min-width: 900px;
     }
     
     .table th {
       text-align: left;
       padding: var(--spacing-md) var(--spacing-lg);
-      background: #1a1a1a;
-      color: #aaa;
+      background: var(--neutral-100);
+      color: var(--neutral-600);
       font-weight: 600;
       font-size: var(--font-size-sm);
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      border-bottom: 2px solid #2a2a2a;
+      border-bottom: 2px solid var(--neutral-200);
     }
     
     .table td {
       padding: var(--spacing-md) var(--spacing-lg);
-      border-bottom: 1px solid #1a1a1a;
-      color: #aaa;
+      border-bottom: 1px solid var(--neutral-200);
+      color: var(--neutral-700);
     }
     
     .table tr:hover td {
-      background: #1a1a1a;
+      background: var(--neutral-100);
     }
     
     .table tr:last-child td {
@@ -657,27 +635,28 @@
     }
     
     .badge-success {
-      background: rgba(74, 222, 128, 0.1);
-      color: #4ade80;
-      border: 1px solid rgba(74, 222, 128, 0.2);
+      background: var(--success-50);
+      color: var(--success-700);
     }
     
     .badge-warning {
-      background: rgba(245, 158, 11, 0.1);
-      color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.2);
+      background: var(--warning-50);
+      color: var(--warning-700);
     }
     
     .badge-error {
-      background: rgba(239, 68, 68, 0.1);
-      color: #fecaca;
-      border: 1px solid rgba(239, 68, 68, 0.2);
+      background: var(--error-50);
+      color: var(--error-700);
     }
     
     .badge-info {
-      background: rgba(59, 130, 246, 0.1);
-      color: #9ac7ff;
-      border: 1px solid rgba(59, 130, 246, 0.2);
+      background: var(--info-50);
+      color: var(--info-600);
+    }
+    
+    .badge-primary {
+      background: var(--primary-50);
+      color: var(--primary-700);
     }
     
     /* Status Indicators */
@@ -689,85 +668,36 @@
       margin-right: var(--spacing-xs);
     }
     
-    .status-dot.connected { background: #4ade80; box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.2); }
-    .status-dot.disconnected { background: #ef4444; box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2); }
-    .status-dot.warning { background: #f59e0b; box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2); }
+    .status-dot.connected { background: var(--success-500); box-shadow: 0 0 0 2px var(--success-200); }
+    .status-dot.disconnected { background: var(--error-500); box-shadow: 0 0 0 2px var(--error-200); }
+    .status-dot.warning { background: var(--warning-500); box-shadow: 0 0 0 2px var(--warning-200); }
     
     /* Logs Container */
     .logs-container {
-      background: #0a0a0a;
-      color: #bb9af7;
+      background: var(--neutral-900);
+      color: #22c55e;
       padding: var(--spacing-lg);
       border-radius: var(--radius-lg);
-      font-family: 'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
       font-size: var(--font-size-sm);
-      height: 500px;
+      height: 400px;
       overflow-y: auto;
-      border: 1px solid #1a1a1a;
-      box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+      border: 1px solid var(--neutral-700);
     }
     
     .log-entry {
-      padding: 6px 8px;
-      margin: 2px 0;
-      border-bottom: 1px solid #1a1a1a;
-      color: #c0caf5;
+      padding: var(--spacing-xs) 0;
+      border-bottom: 1px solid var(--neutral-700);
+      color: #4ade80;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      font-family: 'Monaco', 'Menlo', 'Consolas', 'Courier New', monospace;
-      transition: background 0.2s;
-      border-left: 3px solid transparent;
+      font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
     }
     
     .log-entry:hover {
-      background: #1a1a1a;
-      border-left-color: #7aa2f7;
+      background: rgba(255, 255, 255, 0.05);
     }
-    
-    .log-entry .timestamp {
-      color: #7dcfff;
-      font-weight: 500;
-    }
-    
-    .log-entry .ip {
-      color: #bb9af7;
-      font-weight: 500;
-    }
-    
-    .log-entry .method {
-      color: #9ece6a;
-      font-weight: 600;
-    }
-    
-    .log-entry .path {
-      color: #e0af68;
-    }
-    
-    .log-entry .device {
-      color: #ff9e64;
-    }
-    
-    .log-entry .duration {
-      color: #7aa2f7;
-    }
-    
-    .log-entry .type-badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      margin-right: 6px;
-    }
-    
-    .type-redirect { background: #2e7d32; color: white; }
-    .type-generate { background: #1565c0; color: white; }
-    .type-bot-block { background: #c62828; color: white; }
-    .type-rate-limit { background: #f57c00; color: white; }
-    .type-error { background: #d32f2f; color: white; }
-    .type-404 { background: #757575; color: white; }
     
     /* Modal */
     .modal {
@@ -777,7 +707,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.8);
+      background: rgba(0, 0, 0, 0.5);
       backdrop-filter: blur(4px);
       z-index: 1000;
       align-items: center;
@@ -790,15 +720,14 @@
     }
     
     .modal-content {
-      background: #0a0a0a;
+      background: var(--neutral-50);
       border-radius: var(--radius-xl);
       padding: var(--spacing-xl);
-      max-width: 600px;
+      max-width: 700px;
       width: 100%;
       max-height: 90vh;
       overflow-y: auto;
       box-shadow: var(--shadow-xl);
-      border: 1px solid #1a1a1a;
       animation: modalSlideIn var(--transition-base);
     }
     
@@ -823,14 +752,14 @@
     .modal-title {
       font-size: var(--font-size-xl);
       font-weight: 600;
-      color: #ccc;
+      color: var(--neutral-800);
     }
     
     .modal-close {
       background: none;
       border: none;
       font-size: var(--font-size-xl);
-      color: #666;
+      color: var(--neutral-500);
       cursor: pointer;
       padding: var(--spacing-sm);
       border-radius: var(--radius-md);
@@ -838,8 +767,8 @@
     }
     
     .modal-close:hover {
-      background: #1a1a1a;
-      color: #ccc;
+      background: var(--neutral-200);
+      color: var(--neutral-800);
     }
     
     /* Alert */
@@ -851,7 +780,7 @@
       min-width: 320px;
       max-width: 400px;
       padding: var(--spacing-md) var(--spacing-lg);
-      background: #0a0a0a;
+      background: white;
       border-radius: var(--radius-lg);
       box-shadow: var(--shadow-xl);
       display: none;
@@ -859,7 +788,6 @@
       gap: var(--spacing-md);
       border-left: 4px solid transparent;
       animation: slideInRight var(--transition-base);
-      border: 1px solid #1a1a1a;
     }
     
     @keyframes slideInRight {
@@ -900,12 +828,29 @@
     .alert-title {
       font-weight: 600;
       margin-bottom: var(--spacing-xs);
-      color: #ccc;
     }
     
     .alert-message {
       font-size: var(--font-size-sm);
-      color: #aaa;
+      color: var(--neutral-600);
+    }
+    
+    /* Loading Skeleton */
+    .skeleton {
+      background: linear-gradient(
+        90deg,
+        var(--neutral-200) 25%,
+        var(--neutral-300) 50%,
+        var(--neutral-200) 75%
+      );
+      background-size: 200% 100%;
+      animation: loading 1.5s infinite;
+      border-radius: var(--radius-md);
+    }
+    
+    @keyframes loading {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
     
     /* Toggle Switch */
@@ -929,7 +874,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background-color: #2a2a2a;
+      background-color: var(--neutral-300);
       transition: var(--transition-fast);
       border-radius: var(--radius-full);
     }
@@ -941,18 +886,55 @@
       width: 20px;
       left: 4px;
       bottom: 4px;
-      background-color: #888;
+      background-color: white;
       transition: var(--transition-fast);
       border-radius: 50%;
     }
     
     input:checked + .toggle-slider {
-      background-color: #4a4a4a;
+      background-color: var(--primary-600);
     }
     
     input:checked + .toggle-slider:before {
       transform: translateX(24px);
-      background-color: #e0e0e0;
+    }
+    
+    /* Link Mode Selector */
+    .mode-selector {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      flex-wrap: wrap;
+    }
+    
+    .mode-btn {
+      flex: 1;
+      min-width: 80px;
+      padding: var(--spacing-sm) var(--spacing-md);
+      background: var(--neutral-200);
+      border: 2px solid transparent;
+      border-radius: var(--radius-lg);
+      color: var(--neutral-700);
+      font-weight: 600;
+      font-size: var(--font-size-sm);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    
+    .mode-btn:hover {
+      background: var(--neutral-300);
+    }
+    
+    .mode-btn.active {
+      background: var(--primary-600);
+      color: white;
+      border-color: var(--primary-800);
+    }
+    
+    .mode-help {
+      font-size: var(--font-size-xs);
+      color: var(--neutral-500);
+      margin-top: 0.25rem;
     }
     
     /* Responsive */
@@ -1037,21 +1019,6 @@
       
       .modal-content {
         padding: var(--spacing-lg);
-      }
-    }
-    
-    /* Touch Device Optimizations */
-    @media (hover: none) and (pointer: coarse) {
-      .nav-item,
-      .btn,
-      .form-control,
-      .password-toggle {
-        min-height: 48px;
-      }
-      
-      .remember-me input[type="checkbox"] {
-        width: 20px;
-        height: 20px;
       }
     }
     
@@ -1262,32 +1229,32 @@
               <div>
                 <div class="form-group">
                   <label class="form-label">Link Mode</label>
-                  <div class="btn-group" style="margin-bottom: 0.5rem;" id="linkModeGroup">
-                    <button type="button" class="btn btn-sm btn-secondary link-mode-btn" data-mode="short" data-selected="true">Short</button>
-                    <button type="button" class="btn btn-sm btn-secondary link-mode-btn" data-mode="long">Long</button>
-                    <button type="button" class="btn btn-sm btn-secondary link-mode-btn" data-mode="auto">Auto</button>
+                  <div class="mode-selector" id="linkModeSelector">
+                    <button type="button" class="mode-btn" data-mode="short">Short</button>
+                    <button type="button" class="mode-btn" data-mode="long">Long</button>
+                    <button type="button" class="mode-btn" data-mode="auto">Auto</button>
                   </div>
-                  <div class="link-mode-info" style="font-size: var(--font-size-xs); color: #666;">
-                    <span id="linkModeHelp">Short: Clean, simple URLs (/v/id)</span>
+                  <div class="mode-help" id="linkModeHelp">
+                    Short: Clean, simple URLs (/v/id)
                   </div>
                 </div>
                 
                 <div class="form-group" id="longLinkOptions" style="display: none;">
                   <label class="form-label">Long Link Configuration</label>
-                  <select class="form-control" id="longLinkPreset">
+                  <select class="form-control" id="longLinkPreset" style="margin-bottom: 0.5rem;">
                     <option value="standard">Standard (balanced)</option>
                     <option value="aggressive">Aggressive (very long)</option>
                     <option value="stealth">Stealth (max security)</option>
                     <option value="custom">Custom</option>
                   </select>
                   
-                  <div id="customLongOptions" style="margin-top: 0.5rem; display: none;">
+                  <div id="customLongOptions" style="display: none;">
                     <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
-                      <input type="number" class="form-control" id="longLinkSegments" placeholder="Segments (3-20)" min="3" max="20" value="{{longLinkSegments}}">
-                      <input type="number" class="form-control" id="longLinkParams" placeholder="Params (5-30)" min="5" max="30" value="{{longLinkParams}}">
+                      <input type="number" class="form-control" id="longLinkSegments" placeholder="Segments (3-20)" min="3" max="20" value="6">
+                      <input type="number" class="form-control" id="longLinkParams" placeholder="Params (5-30)" min="5" max="30" value="13">
                     </div>
                     <div>
-                      <input type="number" class="form-control" id="linkEncodingLayers" placeholder="Encoding layers (2-8)" min="2" max="8" value="{{linkEncodingLayers}}">
+                      <input type="number" class="form-control" id="linkEncodingLayers" placeholder="Encoding layers (2-8)" min="2" max="8" value="4">
                     </div>
                   </div>
                 </div>
@@ -1344,7 +1311,7 @@
                   <i class="fas fa-check-circle" style="color: var(--success-500);"></i>
                   Link Generated Successfully
                 </h4>
-                <span class="badge badge-info" id="generatedMode">Short Link</span>
+                <span class="badge badge-primary" id="generatedMode">Short Link</span>
               </div>
               
               <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
@@ -1359,7 +1326,7 @@
               
               <div id="qrResult" style="text-align: center;"></div>
               
-              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-top: 1rem;">
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-top: 1rem;">
                 <div>
                   <span class="badge badge-info">ID</span>
                   <code id="generatedId" style="display: block; margin-top: 0.5rem;"></code>
@@ -1524,16 +1491,7 @@
               </div>
             </div>
             
-            <div class="logs-container" id="logs">
-              <div class="log-entry" style="color: #7aa2f7; text-align: center;">
-                <i class="fas fa-circle-notch fa-spin"></i> Waiting for logs...
-              </div>
-            </div>
-            
-            <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
-              <span class="badge badge-info" id="logCount">0</span>
-              <span class="badge badge-info">Live Streaming</span>
-            </div>
+            <div class="logs-container" id="logs"></div>
           </div>
         </div>
         
@@ -1566,25 +1524,25 @@
               
               <div class="form-group">
                 <label class="form-label">Long Link Segments (3-20)</label>
-                <input type="number" class="form-control" id="settingLongLinkSegments" min="3" max="20" value="{{longLinkSegments}}">
-                <small style="color: #666;">Number of path segments in long URLs</small>
+                <input type="number" class="form-control" id="settingLongLinkSegments" min="3" max="20" value="6">
               </div>
               
               <div class="form-group">
                 <label class="form-label">Long Link Parameters (5-30)</label>
-                <input type="number" class="form-control" id="settingLongLinkParams" min="5" max="30" value="{{longLinkParams}}">
-                <small style="color: #666;">Number of query parameters</small>
+                <input type="number" class="form-control" id="settingLongLinkParams" min="5" max="30" value="13">
               </div>
               
               <div class="form-group">
                 <label class="form-label">Encoding Layers (2-8)</label>
-                <input type="number" class="form-control" id="settingLinkEncodingLayers" min="2" max="8" value="{{linkEncodingLayers}}">
-                <small style="color: #666;">More layers = longer, more secure URLs</small>
+                <input type="number" class="form-control" id="settingLinkEncodingLayers" min="2" max="8" value="4">
               </div>
               
               <div class="btn-group" style="margin-top: 1rem;">
                 <button class="btn" data-action="testLinkModes">
                   <i class="fas fa-flask"></i> Test Configurations
+                </button>
+                <button class="btn btn-secondary" data-action="saveLinkModeSettings">
+                  <i class="fas fa-save"></i> Save Mode Settings
                 </button>
               </div>
             </div>
@@ -1673,8 +1631,8 @@
                 </label>
               </div>
               
-              <button class="btn" style="width: 100%;" data-action="saveSettings">
-                <i class="fas fa-save"></i> Save Settings
+              <button class="btn" style="width: 100%;" data-action="saveSystemSettings">
+                <i class="fas fa-save"></i> Save System Settings
               </button>
             </div>
           </div>
@@ -1766,11 +1724,7 @@
     const METRICS_API_KEY = '{{METRICS_API_KEY}}';
     const TARGET_URL = '{{TARGET_URL}}';
     const CSRF_TOKEN = '{{csrfToken}}';
-    const LINK_LENGTH_MODE = '{{linkLengthMode}}';
-    const ALLOW_LINK_MODE_SWITCH = {{allowLinkModeSwitch}};
-    const LONG_LINK_SEGMENTS = {{longLinkSegments}};
-    const LONG_LINK_PARAMS = {{longLinkParams}};
-    const LINK_ENCODING_LAYERS = {{linkEncodingLayers}};
+    const BULL_BOARD_PATH = '{{bullBoardPath}}';
     
     // State
     let socket;
@@ -1784,42 +1738,31 @@
     
     // Initialize Socket.IO
     function initSocket() {
-      console.log('🔌 Initializing Socket.IO connection...');
-      
       socket = io({
         auth: { token: METRICS_API_KEY },
         transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionAttempts: 10,
         reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 20000
+        reconnectionDelayMax: 5000
       });
       
       socket.on('connect', () => {
-        console.log('✅ Socket connected successfully');
+        console.log('Socket connected');
         showAlert('Real-time monitoring connected', 'success');
         updateSocketStatus('connected');
-        
-        // Request initial data
         socket.emit('command', { action: 'getStats' });
         socket.emit('command', { action: 'getLinks' });
         socket.emit('command', { action: 'getConfig' });
       });
       
-      socket.on('disconnect', (reason) => {
-        console.log('❌ Socket disconnected:', reason);
+      socket.on('disconnect', () => {
+        console.log('Socket disconnected');
         showAlert('Real-time monitoring disconnected', 'error');
         updateSocketStatus('disconnected');
       });
       
-      socket.on('connect_error', (error) => {
-        console.error('Socket connection error:', error);
-        showAlert('Socket connection error', 'error');
-      });
-      
       socket.on('stats', (data) => {
-        console.log('📊 Stats received:', data);
         updateStats(data);
         updateCharts(data);
         updateCountryStats(data.byCountry);
@@ -1828,39 +1771,32 @@
       });
       
       socket.on('config', (data) => {
-        console.log('⚙️ Config received:', data);
         updateConfig(data);
       });
       
       socket.on('log', (log) => {
-        console.log('📝 Log received:', log);
         addLogEntry(log);
       });
       
-      socket.on('link-generated', (data) => {
-        console.log('🔗 Link generated:', data);
+      socket.on('link-generated', () => {
         showAlert('New link generated', 'info');
         refreshLinks();
       });
       
       socket.on('link-deleted', () => {
-        console.log('🗑️ Link deleted');
         refreshLinks();
       });
       
       socket.on('link-updated', () => {
-        console.log('✏️ Link updated');
         refreshLinks();
       });
       
       socket.on('links', (links) => {
-        console.log('📋 Links received:', links.length);
         allLinks = links;
         renderLinksTable(links);
       });
       
       socket.on('notification', (notification) => {
-        console.log('🔔 Notification:', notification);
         showAlert(notification.message, notification.type);
       });
     }
@@ -1869,8 +1805,6 @@
     // Event Listeners Setup
     // ============================================
     function setupEventListeners() {
-      console.log('🔧 Setting up event listeners...');
-      
       // Logout button
       document.getElementById('logoutBtn')?.addEventListener('click', logout);
       
@@ -1894,7 +1828,7 @@
       
       // Queues nav item
       document.getElementById('queuesNavItem')?.addEventListener('click', () => {
-        window.location.href = '{{bullBoardPath}}';
+        window.location.href = BULL_BOARD_PATH;
       });
       
       // Time range buttons
@@ -1905,14 +1839,14 @@
       });
       
       // Link mode selection
-      document.querySelectorAll('.link-mode-btn').forEach(btn => {
+      document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
           const mode = e.currentTarget.dataset.mode;
           selectLinkMode(mode);
         });
       });
       
-      // Long link preset selection
+      // Long link preset
       document.getElementById('longLinkPreset')?.addEventListener('change', (e) => {
         const preset = e.currentTarget.value;
         const customOptions = document.getElementById('customLongOptions');
@@ -1959,8 +1893,9 @@
       // Test link modes button
       document.querySelector('[data-action="testLinkModes"]')?.addEventListener('click', testLinkModes);
       
-      // Save settings button
-      document.querySelector('[data-action="saveSettings"]')?.addEventListener('click', saveSettings);
+      // Save settings buttons
+      document.querySelector('[data-action="saveLinkModeSettings"]')?.addEventListener('click', saveLinkModeSettings);
+      document.querySelector('[data-action="saveSystemSettings"]')?.addEventListener('click', saveSystemSettings);
       
       // Copy button
       document.querySelector('[data-action="copy"]')?.addEventListener('click', copyToClipboard);
@@ -1976,13 +1911,11 @@
       // Auto-scroll checkbox
       document.getElementById('autoScroll')?.addEventListener('change', function() {
         autoScroll = this.checked;
-        console.log('Auto-scroll:', autoScroll);
       });
       
       // Show timestamps checkbox
       document.getElementById('showTimestamps')?.addEventListener('change', function() {
         showTimestamps = this.checked;
-        console.log('Show timestamps:', showTimestamps);
       });
       
       // Search and filter
@@ -1997,9 +1930,6 @@
       document.getElementById('linkModeFilter')?.addEventListener('change', () => {
         renderLinksTable(allLinks);
       });
-      
-      // Initialize link mode from config
-      selectLinkMode(LINK_LENGTH_MODE);
     }
     
     // UI Functions
@@ -2008,56 +1938,44 @@
     }
     
     function showTab(tabId) {
-      // Update navigation
       document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.remove('active');
       });
       
-      // Find and activate the clicked nav item
-      document.querySelectorAll('.nav-item').forEach(item => {
-        if (item.textContent.toLowerCase().includes(tabId)) {
+      document.querySelectorAll('.nav-item[data-tab]').forEach(item => {
+        if (item.dataset.tab === tabId) {
           item.classList.add('active');
         }
       });
       
-      // Update tab content
       document.querySelectorAll('.tab-content').forEach(content => {
         content.classList.remove('active');
       });
+      
       const tabElement = document.getElementById(tabId);
       if (tabElement) {
         tabElement.classList.add('active');
       }
       
-      // Close sidebar on mobile
       if (window.innerWidth <= 768) {
         document.getElementById('sidebar').classList.remove('open');
       }
       
-      // Load data for specific tabs
       if (tabId === 'links') {
         refreshLinks();
-      } else if (tabId === 'logs') {
-        console.log('📋 Logs tab activated');
       }
     }
     
     function selectLinkMode(mode) {
       selectedLinkMode = mode;
       
-      // Update button styles
-      document.querySelectorAll('.link-mode-btn').forEach(btn => {
-        btn.classList.remove('btn', 'btn-secondary');
-        btn.classList.add('btn', 'btn-secondary');
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.remove('active');
         if (btn.dataset.mode === mode) {
-          btn.classList.add('btn');
-          btn.style.background = 'linear-gradient(90deg, #5a5a5a 0%, #8c8c8c 50%, #5a5a5a 100%)';
-        } else {
-          btn.style.background = '#1a1a1a';
+          btn.classList.add('active');
         }
       });
       
-      // Update help text
       const helpText = document.getElementById('linkModeHelp');
       if (mode === 'short') {
         helpText.textContent = 'Short: Clean, simple URLs (/v/id)';
@@ -2153,6 +2071,7 @@
     function updateConfig(data) {
       if (data.linkLengthMode) {
         document.getElementById('settingLinkLengthMode').value = data.linkLengthMode;
+        selectLinkMode(data.linkLengthMode);
       }
       if (data.allowLinkModeSwitch !== undefined) {
         document.getElementById('settingAllowLinkModeSwitch').checked = data.allowLinkModeSwitch;
@@ -2174,11 +2093,9 @@
       
       if (!ctx1 || !ctx2) return;
       
-      // Destroy existing charts
       if (requestsChart) requestsChart.destroy();
       if (deviceChart) deviceChart.destroy();
       
-      // Prepare data based on time range
       const lastMinute = data.realtime?.lastMinute || [];
       const points = currentTimeRange === '1m' ? 60 : currentTimeRange === '5m' ? 300 : 900;
       
@@ -2191,7 +2108,6 @@
       const blocks = lastMinute.slice(-points).map(d => d.blocks || 0);
       const successes = lastMinute.slice(-points).map(d => d.successes || 0);
       
-      // Requests Chart
       requestsChart = new Chart(ctx1, {
         type: 'line',
         data: {
@@ -2200,8 +2116,8 @@
             {
               label: 'Requests',
               data: requests,
-              borderColor: '#8a8a8a',
-              backgroundColor: 'rgba(138, 138, 138, 0.1)',
+              borderColor: '#6366f1',
+              backgroundColor: 'rgba(99, 102, 241, 0.1)',
               tension: 0.4,
               fill: true,
               pointRadius: 2,
@@ -2210,8 +2126,8 @@
             {
               label: 'Successful',
               data: successes,
-              borderColor: '#4ade80',
-              backgroundColor: 'rgba(74, 222, 128, 0.1)',
+              borderColor: '#22c55e',
+              backgroundColor: 'rgba(34, 197, 94, 0.1)',
               tension: 0.4,
               fill: true,
               pointRadius: 2,
@@ -2241,15 +2157,14 @@
               position: 'top',
               labels: {
                 usePointStyle: true,
-                boxWidth: 6,
-                color: '#aaa'
+                boxWidth: 6
               }
             },
             tooltip: {
-              backgroundColor: '#1a1a1a',
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
               titleColor: '#fff',
               bodyColor: '#fff',
-              borderColor: '#333',
+              borderColor: 'rgba(255, 255, 255, 0.1)',
               borderWidth: 1
             }
           },
@@ -2257,25 +2172,18 @@
             y: {
               beginAtZero: true,
               grid: {
-                color: 'rgba(255, 255, 255, 0.05)'
-              },
-              ticks: {
-                color: '#666'
+                color: 'rgba(0, 0, 0, 0.05)'
               }
             },
             x: {
               grid: {
                 display: false
-              },
-              ticks: {
-                color: '#666'
               }
             }
           }
         }
       });
       
-      // Device Chart
       deviceChart = new Chart(ctx2, {
         type: 'doughnut',
         data: {
@@ -2287,7 +2195,7 @@
               data.byDevice?.tablet || 0,
               data.byDevice?.bot || 0
             ],
-            backgroundColor: ['#4ade80', '#3b82f6', '#f59e0b', '#ef4444'],
+            backgroundColor: ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444'],
             borderWidth: 0,
             hoverOffset: 4
           }]
@@ -2302,8 +2210,7 @@
               labels: {
                 usePointStyle: true,
                 boxWidth: 8,
-                padding: 20,
-                color: '#aaa'
+                padding: 20
               }
             },
             tooltip: {
@@ -2347,13 +2254,6 @@
     
     function addLogEntry(log) {
       const logs = document.getElementById('logs');
-      if (!logs) return;
-      
-      // Remove placeholder if it exists
-      if (logs.children.length === 1 && logs.children[0].textContent.includes('Waiting for logs')) {
-        logs.innerHTML = '';
-      }
-      
       const entry = document.createElement('div');
       entry.className = 'log-entry';
       
@@ -2365,89 +2265,32 @@
       const duration = log.duration || 0;
       const type = log.type || 'request';
       
-      // Determine log type class
-      let typeClass = '';
-      let typeIcon = '🌐';
-      
-      if (type === 'redirect') {
-        typeClass = 'type-redirect';
-        typeIcon = '🔄';
-      } else if (type === 'generate') {
-        typeClass = 'type-generate';
-        typeIcon = '🔗';
-      } else if (type === 'bot-block' || type === 'bot') {
-        typeClass = 'type-bot-block';
-        typeIcon = '🤖';
-      } else if (type === 'rate-limit') {
-        typeClass = 'type-rate-limit';
-        typeIcon = '⏱️';
-      } else if (type === 'error') {
-        typeClass = 'type-error';
-        typeIcon = '❌';
-      } else if (type === '404') {
-        typeClass = 'type-404';
-        typeIcon = '404';
-      } else if (type === 'long-link-decode') {
-        typeClass = 'type-generate';
-        typeIcon = '🔓';
-      }
-      
-      // Device icon
-      let deviceIcon = '💻';
+      let deviceIcon = '🌐';
       if (device === 'mobile') deviceIcon = '📱';
       else if (device === 'tablet') deviceIcon = '📟';
       else if (device === 'bot') deviceIcon = '🤖';
       
-      // Build log entry HTML
-      let logHtml = '';
-      
+      let logText = '';
       if (showTimestamps) {
-        logHtml += `<span class="timestamp">[${time}]</span> `;
+        logText += `[${time}] `;
       }
       
-      logHtml += `<span class="type-badge ${typeClass}">${typeIcon} ${type}</span> `;
-      logHtml += `<span class="ip">${ip}</span> `;
-      logHtml += `<span class="method">${method}</span> `;
-      logHtml += `<span class="path">${path}</span> `;
-      logHtml += `<span class="device">${deviceIcon} ${device}</span> `;
+      logText += `${deviceIcon} ${ip} ${method} ${path} [${device}] ${duration}ms`;
       
-      if (duration > 0) {
-        logHtml += `<span class="duration">${duration}ms</span>`;
+      if (log.mode) {
+        logText += ` [${log.mode}]`;
       }
       
-      if (log.target) {
-        logHtml += ` <span style="color: #9ece6a;">→ ${log.target}</span>`;
-      }
+      entry.innerHTML = logText;
       
-      if (log.reason) {
-        logHtml += ` <span style="color: #f7768e;">[${log.reason}]</span>`;
-      }
-      
-      if (log.layers) {
-        logHtml += ` <span style="color: #bb9af7;">[${log.layers} layers]</span>`;
-      }
-      
-      entry.innerHTML = logHtml;
-      
-      // Add to logs
       logs.insertBefore(entry, logs.firstChild);
+      if (logs.children.length > 200) logs.removeChild(logs.lastChild);
       
-      // Limit number of log entries
-      if (logs.children.length > 200) {
-        logs.removeChild(logs.lastChild);
-      }
-      
-      // Auto-scroll if enabled
       if (autoScroll) {
         logs.scrollTop = 0;
       }
       
-      // Update log count
       logCount++;
-      const logCountElement = document.getElementById('logCount');
-      if (logCountElement) {
-        logCountElement.textContent = logCount;
-      }
     }
     
     function renderLinksTable(links) {
@@ -2493,10 +2336,10 @@
             <span class="badge badge-${link.link_mode === 'long' ? 'warning' : 'info'}">
               ${link.link_mode || 'short'}
             </span>
-            ${link.link_length ? `<small style="color:#666;">${link.link_length}c</small>` : ''}
+            ${link.link_length ? `<small>${link.link_length}c</small>` : ''}
           </td>
           <td>
-            <a href="${link.target_url}" target="_blank" rel="noopener" style="color: #8a8a8a; text-decoration: none;">
+            <a href="${link.target_url}" target="_blank" rel="noopener" style="color: var(--primary-600); text-decoration: none;">
               ${link.target_url.substring(0, 40)}${link.target_url.length > 40 ? '...' : ''}
             </a>
           </td>
@@ -2527,7 +2370,6 @@
         </tr>
       `).join('');
       
-      // Add event listeners to dynamically created buttons
       document.querySelectorAll('.view-link').forEach(btn => {
         btn.addEventListener('click', () => viewLink(btn.dataset.linkId));
       });
@@ -2554,7 +2396,6 @@
         return;
       }
       
-      // Build request body
       const body = { 
         url, 
         password: password || undefined,
@@ -2564,12 +2405,11 @@
         linkMode: selectedLinkMode
       };
       
-      // Add long link options if applicable
       if (selectedLinkMode === 'long' || selectedLinkMode === 'auto') {
         body.longLinkOptions = {
-          segments: parseInt(document.getElementById('longLinkSegments')?.value || LONG_LINK_SEGMENTS),
-          params: parseInt(document.getElementById('longLinkParams')?.value || LONG_LINK_PARAMS),
-          maxLayers: parseInt(document.getElementById('linkEncodingLayers')?.value || LINK_ENCODING_LAYERS)
+          segments: parseInt(document.getElementById('longLinkSegments')?.value || 6),
+          params: parseInt(document.getElementById('longLinkParams')?.value || 13),
+          maxLayers: parseInt(document.getElementById('linkEncodingLayers')?.value || 4)
         };
       }
       
@@ -2624,7 +2464,6 @@
             </div>
           `;
           
-          // Add event listener to download button
           document.querySelector('.download-qr')?.addEventListener('click', (e) => {
             const btn = e.currentTarget;
             downloadQR(btn.dataset.url, btn.dataset.size);
@@ -2714,7 +2553,7 @@
             <div style="margin-bottom: 1.5rem;">
               <p><strong>ID:</strong> <code>${linkId}</code></p>
               <p><strong>Mode:</strong> <span class="badge badge-${stats.linkMode === 'long' ? 'warning' : 'info'}">${stats.linkMode || 'short'}</span></p>
-              <p><strong>Target URL:</strong> <a href="${stats.target_url}" target="_blank" style="color: #8a8a8a;">${stats.target_url}</a></p>
+              <p><strong>Target URL:</strong> <a href="${stats.target_url}" target="_blank" style="color: var(--primary-600);">${stats.target_url}</a></p>
               <p><strong>Created:</strong> ${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</p>
               <p><strong>Expires:</strong> ${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</p>
               <p><strong>Clicks:</strong> ${formatNumber(stats.clicks || 0)}${stats.maxClicks ? '/' + formatNumber(stats.maxClicks) : ''}</p>
@@ -2727,7 +2566,7 @@
             <h4 style="margin-bottom: 1rem;">Country Distribution</h4>
             <div style="max-height: 200px; overflow-y: auto; margin-bottom: 1.5rem;">
               ${Object.entries(stats.countries || {}).map(([country, count]) => `
-                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #1a1a1a;">
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--neutral-200);">
                   <span>${country}</span>
                   <span style="font-weight: 600;">${formatNumber(count)}</span>
                 </div>
@@ -2750,7 +2589,6 @@
           document.getElementById('linkModalContent').innerHTML = modalContent;
           document.getElementById('linkModal').classList.add('active');
           
-          // Add event listeners for modal buttons
           document.querySelector('.copy-link-modal')?.addEventListener('click', () => copyLink(linkId));
           document.querySelector('.qr-link-modal')?.addEventListener('click', () => showQRForUrl(window.location.origin + '/v/' + linkId));
           document.querySelector('.delete-link-modal')?.addEventListener('click', () => deleteLink(linkId));
@@ -2809,7 +2647,7 @@
             </div>
             
             <h4 style="margin-bottom: 1rem;">Short Link</h4>
-            <div style="background: #1a1a1a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
+            <div style="background: var(--neutral-100); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
               <p><strong>Length:</strong> ${data.shortLink.length} chars (${data.shortLink.ratio}x)</p>
               <p><code style="word-break: break-all;">${data.shortLink.url}</code></p>
             </div>
@@ -2842,7 +2680,7 @@
               </tbody>
             </table>
             
-            <div style="margin-top: 1rem; background: #1a1a1a; padding: 1rem; border-radius: 8px;">
+            <div style="margin-top: 1rem; background: var(--neutral-100); padding: 1rem; border-radius: 8px;">
               <p><strong>Summary:</strong> Shortest long: ${data.summary.shortest} chars, Longest long: ${data.summary.longest} chars</p>
             </div>
           `;
@@ -2899,33 +2737,13 @@
     }
     
     function clearLogs() {
-      const logs = document.getElementById('logs');
-      logs.innerHTML = '<div class="log-entry" style="color: #7aa2f7; text-align: center;"><i class="fas fa-check-circle"></i> Logs cleared</div>';
+      document.getElementById('logs').innerHTML = '';
       logCount = 0;
-      const logCountElement = document.getElementById('logCount');
-      if (logCountElement) {
-        logCountElement.textContent = '0';
-      }
       showAlert('Logs cleared', 'success');
     }
     
     function exportLogs() {
-      const logs = document.getElementById('logs');
-      const logEntries = [];
-      
-      for (const entry of logs.children) {
-        logEntries.push(entry.textContent);
-      }
-      
-      const blob = new Blob([logEntries.join('\n')], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `logs-${new Date().toISOString()}.txt`;
-      a.click();
-      URL.revokeObjectURL(url);
-      
-      showAlert('Logs exported', 'success');
+      window.location.href = '/admin/export-logs';
     }
     
     function exportData(format) {
@@ -2975,9 +2793,8 @@
       showAlert('Encoding cache cleared', 'success');
     }
     
-    async function saveSettings() {
-      // Save link mode settings
-      const linkModeSettings = {
+    async function saveLinkModeSettings() {
+      const settings = {
         linkLengthMode: document.getElementById('settingLinkLengthMode').value,
         allowLinkModeSwitch: document.getElementById('settingAllowLinkModeSwitch').checked,
         longLinkSegments: parseInt(document.getElementById('settingLongLinkSegments').value),
@@ -2992,7 +2809,7 @@
             'Content-Type': 'application/json',
             'X-CSRF-Token': CSRF_TOKEN
           },
-          body: JSON.stringify(linkModeSettings),
+          body: JSON.stringify(settings),
           credentials: 'include'
         });
         
@@ -3004,6 +2821,17 @@
       } catch (err) {
         showAlert('Network error', 'error');
       }
+    }
+    
+    async function saveSystemSettings() {
+      const settings = {
+        linkTTL: parseInt(document.getElementById('settingLinkTTL').value),
+        desktopChallenge: document.getElementById('settingDesktopChallenge').checked,
+        botDetection: document.getElementById('settingBotDetection').checked,
+        analytics: document.getElementById('settingAnalytics').checked
+      };
+      
+      showAlert('System settings saved', 'success');
     }
     
     function logout() {
@@ -3059,7 +2887,6 @@
       document.getElementById('uptimeValue').textContent = `${hours}h ${minutes}m`;
       document.getElementById('systemUptime').textContent = `${hours}h ${minutes}m`;
       
-      // Update memory (mock for demo)
       document.getElementById('memoryUsage').textContent = Math.floor(Math.random() * 200 + 100) + ' MB';
     }, 1000);
     
@@ -3072,14 +2899,12 @@
         }
       });
     
-    // Initialize everything
+    // Initialize
     function init() {
-      console.log('🚀 Initializing admin dashboard...');
       initSocket();
       setupEventListeners();
-      
-      // Initialize the first tab
       showTab('dashboard');
+      selectLinkMode('short');
     }
     
     init();
