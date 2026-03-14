@@ -1,7 +1,6 @@
 // ============================================
 // Redirector Pro v4.0 - Main Application Logic
 // ============================================
-
 // ============================================
 // State Management
 // ============================================
@@ -13,7 +12,7 @@ let autoScroll = true;
 let showTimestamps = true;
 let currentTimeRange = '5m';
 let logCount = 0;
-let selectedLinkMode = LINK_LENGTH_MODE;
+let selectedLinkMode = typeof LINK_LENGTH_MODE !== 'undefined' ? LINK_LENGTH_MODE : 'short';
 let currentPage = 1;
 const pageSize = 20;
 let securityData = { blockedIPs: [], activeAttacks: [], totalAttempts: 0 };
@@ -49,7 +48,8 @@ function initSocket() {
     socket.emit('command', { action: 'getCacheStats' });
     
     // Request security data if on security tab
-    if (document.getElementById('security').classList.contains('active')) {
+    const securityTab = document.getElementById('security');
+    if (securityTab && securityTab.classList.contains('active')) {
       refreshSecurityData();
     }
   });
@@ -172,7 +172,11 @@ function setupEventListeners() {
   
   // Queues nav item
   document.getElementById('queuesNavItem')?.addEventListener('click', () => {
-    window.location.href = BULL_BOARD_PATH;
+    if (typeof BULL_BOARD_PATH !== 'undefined') {
+      window.location.href = BULL_BOARD_PATH;
+    } else {
+      window.location.href = '/admin/queues';
+    }
   });
   
   // Time range buttons
@@ -273,16 +277,28 @@ function setupEventListeners() {
   // Log controls
   document.getElementById('clearLogsBtn')?.addEventListener('click', clearLogs);
   document.getElementById('exportLogsBtn')?.addEventListener('click', exportLogs);
-  document.getElementById('autoScroll')?.addEventListener('change', (e) => {
-    autoScroll = e.target.checked;
-  });
-  document.getElementById('showTimestamps')?.addEventListener('change', (e) => {
-    showTimestamps = e.target.checked;
-    // Refresh log display
-  });
-  document.getElementById('logFilter')?.addEventListener('change', (e) => {
-    logFilter = e.target.value;
-  });
+  
+  const autoScrollCheckbox = document.getElementById('autoScroll');
+  if (autoScrollCheckbox) {
+    autoScrollCheckbox.addEventListener('change', (e) => {
+      autoScroll = e.target.checked;
+    });
+  }
+  
+  const showTimestampsCheckbox = document.getElementById('showTimestamps');
+  if (showTimestampsCheckbox) {
+    showTimestampsCheckbox.addEventListener('change', (e) => {
+      showTimestamps = e.target.checked;
+      // Refresh log display
+    });
+  }
+  
+  const logFilterSelect = document.getElementById('logFilter');
+  if (logFilterSelect) {
+    logFilterSelect.addEventListener('change', (e) => {
+      logFilter = e.target.value;
+    });
+  }
   
   // Cache management
   document.getElementById('clearAllCache')?.addEventListener('click', () => clearCache('all'));
@@ -297,8 +313,10 @@ function setupEventListeners() {
   const botThresholdSlider = document.getElementById('botThresholdSlider');
   if (botThresholdSlider) {
     botThresholdSlider.addEventListener('input', (e) => {
-      document.getElementById('botThreshold').textContent = e.target.value;
-      document.getElementById('botThresholdBar').style.width = e.target.value + '%';
+      const botThreshold = document.getElementById('botThreshold');
+      const botThresholdBar = document.getElementById('botThresholdBar');
+      if (botThreshold) botThreshold.textContent = e.target.value;
+      if (botThresholdBar) botThresholdBar.style.width = e.target.value + '%';
     });
     botThresholdSlider.addEventListener('change', (e) => {
       updateBotThreshold(parseInt(e.target.value));
@@ -312,7 +330,7 @@ function setupEventListeners() {
   document.getElementById('viewHealthBtn')?.addEventListener('click', viewHealthCheck);
   
   // Initialize link mode
-  selectLinkMode(LINK_LENGTH_MODE);
+  selectLinkMode(selectedLinkMode);
 }
 
 // ============================================
@@ -377,18 +395,18 @@ function selectLinkMode(mode) {
   const longOptions = document.getElementById('longLinkOptions');
   
   if (mode === 'short') {
-    helpText.textContent = 'Short: Clean, simple URLs (/v/id)';
-    longOptions.style.display = 'none';
+    if (helpText) helpText.textContent = 'Short: Clean, simple URLs (/v/id)';
+    if (longOptions) longOptions.style.display = 'none';
   } else if (mode === 'long') {
-    helpText.textContent = 'Long: Obfuscated URLs with many segments and parameters';
-    longOptions.style.display = 'block';
+    if (helpText) helpText.textContent = 'Long: Obfuscated URLs with many segments and parameters';
+    if (longOptions) longOptions.style.display = 'block';
   } else {
-    helpText.textContent = 'Auto: Automatically choose based on URL length';
-    if (ALLOW_LINK_MODE_SWITCH) {
-      longOptions.style.display = 'block';
+    if (helpText) helpText.textContent = 'Auto: Automatically choose based on URL length';
+    if (typeof ALLOW_LINK_MODE_SWITCH !== 'undefined' && ALLOW_LINK_MODE_SWITCH) {
+      if (longOptions) longOptions.style.display = 'block';
     } else {
-      longOptions.style.display = 'none';
-      helpText.textContent = 'Auto mode disabled. Using ' + LINK_LENGTH_MODE + ' mode.';
+      if (longOptions) longOptions.style.display = 'none';
+      if (helpText) helpText.textContent = 'Auto mode disabled. Using ' + (typeof LINK_LENGTH_MODE !== 'undefined' ? LINK_LENGTH_MODE : 'short') + ' mode.';
     }
   }
   
@@ -421,13 +439,19 @@ function applyLongLinkPreset(preset) {
       return;
   }
   
-  document.getElementById('longLinkSegments').value = segments;
-  document.getElementById('longLinkParams').value = params;
-  document.getElementById('linkEncodingLayers').value = layers;
+  const segmentsInput = document.getElementById('longLinkSegments');
+  const paramsInput = document.getElementById('longLinkParams');
+  const layersInput = document.getElementById('linkEncodingLayers');
+  
+  if (segmentsInput) segmentsInput.value = segments;
+  if (paramsInput) paramsInput.value = params;
+  if (layersInput) layersInput.value = layers;
 }
 
 function showAlert(message, type = 'info') {
   const alert = document.getElementById('alert');
+  if (!alert) return;
+  
   alert.className = `alert alert-${type}`;
   alert.innerHTML = `
     <div class="alert-icon">
@@ -453,124 +477,175 @@ function updateSocketStatus(status) {
 }
 
 function updateStats(data) {
-  document.getElementById('totalRequests').textContent = formatNumber(data.totalRequests || 0);
-  document.getElementById('activeLinks').textContent = formatNumber(data.realtime?.activeLinks || 0);
-  document.getElementById('botBlocks').textContent = formatNumber(data.botBlocks || 0);
+  const totalRequestsEl = document.getElementById('totalRequests');
+  const activeLinksEl = document.getElementById('activeLinks');
+  const botBlocksEl = document.getElementById('botBlocks');
+  const requestTrendEl = document.getElementById('requestTrend');
+  const blockRateEl = document.getElementById('blockRate');
+  const peakLinksEl = document.getElementById('peakLinks');
+  const totalDevicesEl = document.getElementById('totalDevices');
+  
+  if (totalRequestsEl) totalRequestsEl.textContent = formatNumber(data.totalRequests || 0);
+  if (activeLinksEl) activeLinksEl.textContent = formatNumber(data.realtime?.activeLinks || 0);
+  if (botBlocksEl) botBlocksEl.textContent = formatNumber(data.botBlocks || 0);
   
   // Calculate trends
   const lastMinute = data.realtime?.lastMinute || [];
-  if (lastMinute.length > 1) {
+  if (lastMinute.length > 1 && requestTrendEl) {
     const current = lastMinute[lastMinute.length - 1]?.requests || 0;
     const previous = lastMinute[lastMinute.length - 2]?.requests || 0;
     const trend = previous ? ((current - previous) / previous * 100).toFixed(1) : 0;
-    document.getElementById('requestTrend').textContent = (trend > 0 ? '+' : '') + trend + '%';
+    requestTrendEl.textContent = (trend > 0 ? '+' : '') + trend + '%';
   }
   
   // Block rate
-  const blockRate = data.totalRequests ? ((data.botBlocks / data.totalRequests) * 100).toFixed(1) : 0;
-  document.getElementById('blockRate').textContent = blockRate + '%';
+  if (blockRateEl) {
+    const blockRate = data.totalRequests ? ((data.botBlocks / data.totalRequests) * 100).toFixed(1) : 0;
+    blockRateEl.textContent = blockRate + '%';
+  }
   
   // Peak links
-  document.getElementById('peakLinks').textContent = formatNumber(data.realtime?.peakLinks || 0);
+  if (peakLinksEl) peakLinksEl.textContent = formatNumber(data.realtime?.peakLinks || 0);
   
   // Total devices
-  const totalDevices = Object.values(data.byDevice || {}).reduce((a, b) => a + b, 0);
-  document.getElementById('totalDevices').textContent = formatNumber(totalDevices) + ' total';
+  if (totalDevicesEl) {
+    const totalDevices = Object.values(data.byDevice || {}).reduce((a, b) => a + b, 0);
+    totalDevicesEl.textContent = formatNumber(totalDevices) + ' total';
+  }
 }
 
 function updateLinkModeStats(modes) {
-  if (modes) {
-    document.getElementById('linkModes').textContent = `S:${modes.short || 0} L:${modes.long || 0}`;
+  const linkModesEl = document.getElementById('linkModes');
+  if (modes && linkModesEl) {
+    linkModesEl.textContent = `S:${modes.short || 0} L:${modes.long || 0}`;
   }
 }
 
 function updateCacheStats(caches) {
+  const cacheLinksEl = document.getElementById('cacheLinks');
+  const cacheGeoEl = document.getElementById('cacheGeo');
+  const cacheQREl = document.getElementById('cacheQR');
+  const cacheEncodingEl = document.getElementById('cacheEncoding');
+  
   if (caches) {
-    document.getElementById('cacheLinks').textContent = formatNumber(caches.linkReq || 0);
-    document.getElementById('cacheGeo').textContent = formatNumber(caches.geo || 0);
-    document.getElementById('cacheQR').textContent = formatNumber(caches.qr || 0);
-    document.getElementById('cacheEncoding').textContent = formatNumber(caches.encoding || 0);
+    if (cacheLinksEl) cacheLinksEl.textContent = formatNumber(caches.linkReq || 0);
+    if (cacheGeoEl) cacheGeoEl.textContent = formatNumber(caches.geo || 0);
+    if (cacheQREl) cacheQREl.textContent = formatNumber(caches.qr || 0);
+    if (cacheEncodingEl) cacheEncodingEl.textContent = formatNumber(caches.encoding || 0);
   }
 }
 
 function updateDetailedCacheStats(stats) {
+  const cacheHitsEl = document.getElementById('cacheHits');
+  const cacheMissesEl = document.getElementById('cacheMisses');
+  const detailedHitRateEl = document.getElementById('detailedHitRate');
+  const cacheHitRateEl = document.getElementById('cacheHitRate');
+  
   if (stats) {
     const totalHits = Object.values(stats).reduce((sum, s) => sum + (s.hits || 0), 0);
     const totalMisses = Object.values(stats).reduce((sum, s) => sum + (s.misses || 0), 0);
     const total = totalHits + totalMisses;
     const hitRate = total ? ((totalHits / total) * 100).toFixed(1) : 0;
     
-    document.getElementById('cacheHits').textContent = formatNumber(totalHits);
-    document.getElementById('cacheMisses').textContent = formatNumber(totalMisses);
-    document.getElementById('detailedHitRate').textContent = hitRate + '%';
-    document.getElementById('cacheHitRate').textContent = hitRate + '%';
+    if (cacheHitsEl) cacheHitsEl.textContent = formatNumber(totalHits);
+    if (cacheMissesEl) cacheMissesEl.textContent = formatNumber(totalMisses);
+    if (detailedHitRateEl) detailedHitRateEl.textContent = hitRate + '%';
+    if (cacheHitRateEl) cacheHitRateEl.textContent = hitRate + '%';
   }
 }
 
 function updatePerformanceMetrics(data) {
+  const avgResponseTimeEl = document.getElementById('avgResponseTime');
+  const p95TimeEl = document.getElementById('p95Time');
+  const currentRPSEl = document.getElementById('currentRPS');
+  const peakRPSEl = document.getElementById('peakRPS');
+  
   if (data.performance) {
-    document.getElementById('avgResponseTime').textContent = data.performance.avgResponseTime.toFixed(0) + 'ms';
-    document.getElementById('p95Time').textContent = data.performance.p95ResponseTime.toFixed(0) + 'ms';
+    if (avgResponseTimeEl) avgResponseTimeEl.textContent = data.performance.avgResponseTime.toFixed(0) + 'ms';
+    if (p95TimeEl) p95TimeEl.textContent = data.performance.p95ResponseTime.toFixed(0) + 'ms';
   }
   
   if (data.realtime) {
-    document.getElementById('currentRPS').textContent = data.realtime.requestsPerSecond || 0;
-    document.getElementById('peakRPS').textContent = data.realtime.peakRPS || 0;
+    if (currentRPSEl) currentRPSEl.textContent = data.realtime.requestsPerSecond || 0;
+    if (peakRPSEl) peakRPSEl.textContent = data.realtime.peakRPS || 0;
   }
 }
 
 function updateEncodingStats(encodingStats) {
+  const encodingStatsEl = document.getElementById('encodingStats');
+  const avgLayersEl = document.getElementById('avgLayers');
+  const cacheHitRateEl = document.getElementById('cacheHitRate');
+  const cacheSizeEl = document.getElementById('cacheSize');
+  
   if (encodingStats) {
-    document.getElementById('encodingStats').textContent = formatNumber(encodingStats.totalEncoded || 0);
-    document.getElementById('avgLayers').textContent = (encodingStats.avgLayers || 0).toFixed(1);
+    if (encodingStatsEl) encodingStatsEl.textContent = formatNumber(encodingStats.totalEncoded || 0);
+    if (avgLayersEl) avgLayersEl.textContent = (encodingStats.avgLayers || 0).toFixed(1);
     
     // Cache hit rate
     const totalRequests = (encodingStats.cacheHits || 0) + (encodingStats.cacheMisses || 0);
     const hitRate = totalRequests ? ((encodingStats.cacheHits / totalRequests) * 100).toFixed(1) : 0;
-    document.getElementById('cacheHitRate').textContent = hitRate + '%';
-    document.getElementById('cacheSize').textContent = formatNumber(encodingStats.totalEncoded || 0);
+    if (cacheHitRateEl) cacheHitRateEl.textContent = hitRate + '%';
+    if (cacheSizeEl) cacheSizeEl.textContent = formatNumber(encodingStats.totalEncoded || 0);
   }
 }
 
 function updateSystemMetrics(metrics) {
+  const memoryUsageEl = document.getElementById('memoryUsage');
+  const cpuUsageEl = document.getElementById('cpuUsage');
+  
   if (metrics) {
-    document.getElementById('memoryUsage').textContent = formatBytes(metrics.memory?.heapUsed || 0);
-    document.getElementById('cpuUsage').textContent = (metrics.cpu || 0).toFixed(1) + '%';
+    if (memoryUsageEl) memoryUsageEl.textContent = formatBytes(metrics.memory?.heapUsed || 0);
+    if (cpuUsageEl) cpuUsageEl.textContent = (metrics.cpu || 0).toFixed(1) + '%';
   }
 }
 
 function updateConfig(data) {
-  if (data.linkLengthMode) {
-    document.getElementById('settingLinkLengthMode').value = data.linkLengthMode;
+  const settingLinkLengthMode = document.getElementById('settingLinkLengthMode');
+  const settingAllowLinkModeSwitch = document.getElementById('settingAllowLinkModeSwitch');
+  const settingLongLinkSegments = document.getElementById('settingLongLinkSegments');
+  const settingLongLinkParams = document.getElementById('settingLongLinkParams');
+  const settingLinkEncodingLayers = document.getElementById('settingLinkEncodingLayers');
+  const settingMaxEncodingIterations = document.getElementById('settingMaxEncodingIterations');
+  const settingEnableCompression = document.getElementById('settingEnableCompression');
+  const settingEnableEncryption = document.getElementById('settingEnableEncryption');
+  const longLinkSegments = document.getElementById('longLinkSegments');
+  const longLinkParams = document.getElementById('longLinkParams');
+  const linkEncodingLayers = document.getElementById('linkEncodingLayers');
+  const enableCompression = document.getElementById('enableCompression');
+  const enableEncryption = document.getElementById('enableEncryption');
+  const nodeEnv = document.getElementById('nodeEnv');
+  
+  if (data.linkLengthMode && settingLinkLengthMode) {
+    settingLinkLengthMode.value = data.linkLengthMode;
   }
-  if (data.allowLinkModeSwitch !== undefined) {
-    document.getElementById('settingAllowLinkModeSwitch').checked = data.allowLinkModeSwitch;
+  if (data.allowLinkModeSwitch !== undefined && settingAllowLinkModeSwitch) {
+    settingAllowLinkModeSwitch.checked = data.allowLinkModeSwitch;
   }
   if (data.longLinkSegments) {
-    document.getElementById('settingLongLinkSegments').value = data.longLinkSegments;
-    document.getElementById('longLinkSegments').value = data.longLinkSegments;
+    if (settingLongLinkSegments) settingLongLinkSegments.value = data.longLinkSegments;
+    if (longLinkSegments) longLinkSegments.value = data.longLinkSegments;
   }
   if (data.longLinkParams) {
-    document.getElementById('settingLongLinkParams').value = data.longLinkParams;
-    document.getElementById('longLinkParams').value = data.longLinkParams;
+    if (settingLongLinkParams) settingLongLinkParams.value = data.longLinkParams;
+    if (longLinkParams) longLinkParams.value = data.longLinkParams;
   }
   if (data.linkEncodingLayers) {
-    document.getElementById('settingLinkEncodingLayers').value = data.linkEncodingLayers;
-    document.getElementById('linkEncodingLayers').value = data.linkEncodingLayers;
+    if (settingLinkEncodingLayers) settingLinkEncodingLayers.value = data.linkEncodingLayers;
+    if (linkEncodingLayers) linkEncodingLayers.value = data.linkEncodingLayers;
   }
-  if (data.maxEncodingIterations) {
-    document.getElementById('settingMaxEncodingIterations').value = data.maxEncodingIterations;
+  if (data.maxEncodingIterations && settingMaxEncodingIterations) {
+    settingMaxEncodingIterations.value = data.maxEncodingIterations;
   }
   if (data.enableCompression !== undefined) {
-    document.getElementById('settingEnableCompression').checked = data.enableCompression;
-    document.getElementById('enableCompression').checked = data.enableCompression;
+    if (settingEnableCompression) settingEnableCompression.checked = data.enableCompression;
+    if (enableCompression) enableCompression.checked = data.enableCompression;
   }
   if (data.enableEncryption !== undefined) {
-    document.getElementById('settingEnableEncryption').checked = data.enableEncryption;
-    document.getElementById('enableEncryption').checked = data.enableEncryption;
+    if (settingEnableEncryption) settingEnableEncryption.checked = data.enableEncryption;
+    if (enableEncryption) enableEncryption.checked = data.enableEncryption;
   }
-  if (data.nodeEnv) {
-    document.getElementById('nodeEnv').textContent = data.nodeEnv;
+  if (data.nodeEnv && nodeEnv) {
+    nodeEnv.textContent = data.nodeEnv;
   }
 }
 
@@ -737,9 +812,11 @@ function updateCharts(data) {
 
 function updateCountryStats(countries) {
   const container = document.getElementById('countryStats');
+  const totalCountries = document.getElementById('totalCountries');
+  
   if (!countries || Object.keys(countries).length === 0) {
-    container.innerHTML = '<div class="text-center p-4">No data yet</div>';
-    document.getElementById('totalCountries').textContent = '0 countries';
+    if (container) container.innerHTML = '<div class="text-center p-4">No data yet</div>';
+    if (totalCountries) totalCountries.textContent = '0 countries';
     return;
   }
   
@@ -747,18 +824,20 @@ function updateCountryStats(countries) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8);
   
-  document.getElementById('totalCountries').textContent = Object.keys(countries).length + ' countries';
+  if (totalCountries) totalCountries.textContent = Object.keys(countries).length + ' countries';
   
-  container.innerHTML = sorted.map(([country, count]) => `
-    <div class="stat-card">
-      <div class="stat-header">
-        <span class="stat-title">${country}</span>
-        <span class="stat-icon"><i class="fas fa-flag"></i></span>
+  if (container) {
+    container.innerHTML = sorted.map(([country, count]) => `
+      <div class="stat-card">
+        <div class="stat-header">
+          <span class="stat-title">${country}</span>
+          <span class="stat-icon"><i class="fas fa-flag"></i></span>
+        </div>
+        <div class="stat-value">${formatNumber(count)}</div>
+        <div class="stat-trend">requests</div>
       </div>
-      <div class="stat-value">${formatNumber(count)}</div>
-      <div class="stat-trend">requests</div>
-    </div>
-  `).join('');
+    `).join('');
+  }
 }
 
 function addLogEntry(log) {
@@ -869,7 +948,8 @@ function addLogEntry(log) {
   
   // Update log count
   logCount++;
-  document.getElementById('logCounter').textContent = logCount;
+  const logCounter = document.getElementById('logCounter');
+  if (logCounter) logCounter.textContent = logCount;
 }
 
 function filterAndRenderLinks() {
@@ -887,27 +967,37 @@ function filterAndRenderLinks() {
     return true;
   });
   
-  document.getElementById('totalCount').textContent = filteredLinks.length;
+  const totalCount = document.getElementById('totalCount');
+  if (totalCount) totalCount.textContent = filteredLinks.length;
   currentPage = 1;
   renderLinksTable();
 }
 
 function renderLinksTable() {
   const tbody = document.getElementById('linksTableBody');
+  const displayedCount = document.getElementById('displayedCount');
+  const totalLinksCount = document.getElementById('totalLinksCount');
+  const totalCount = document.getElementById('totalCount');
+  const prevPageBtn = document.getElementById('prevPageBtn');
+  const nextPageBtn = document.getElementById('nextPageBtn');
+  const pageInfo = document.getElementById('pageInfo');
   
   if (!filteredLinks || filteredLinks.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="8" style="text-align: center; padding: 2rem;">
-          <i class="fas fa-link"></i> No links found
-        </td>
-      </tr>
-    `;
-    document.getElementById('displayedCount').textContent = '0';
-    document.getElementById('totalLinksCount').textContent = '0';
-    document.getElementById('prevPageBtn').disabled = true;
-    document.getElementById('nextPageBtn').disabled = true;
-    document.getElementById('pageInfo').textContent = 'Page 1';
+    if (tbody) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="8" style="text-align: center; padding: 2rem;">
+            <i class="fas fa-link"></i> No links found
+          </td>
+        </tr>
+      `;
+    }
+    if (displayedCount) displayedCount.textContent = '0';
+    if (totalLinksCount) totalLinksCount.textContent = '0';
+    if (totalCount) totalCount.textContent = '0';
+    if (prevPageBtn) prevPageBtn.disabled = true;
+    if (nextPageBtn) nextPageBtn.disabled = true;
+    if (pageInfo) pageInfo.textContent = 'Page 1';
     return;
   }
   
@@ -915,69 +1005,71 @@ function renderLinksTable() {
   const end = Math.min(start + pageSize, filteredLinks.length);
   const pageLinks = filteredLinks.slice(start, end);
   
-  document.getElementById('displayedCount').textContent = pageLinks.length;
-  document.getElementById('totalLinksCount').textContent = filteredLinks.length;
-  document.getElementById('totalCount').textContent = filteredLinks.length;
+  if (displayedCount) displayedCount.textContent = pageLinks.length;
+  if (totalLinksCount) totalLinksCount.textContent = filteredLinks.length;
+  if (totalCount) totalCount.textContent = filteredLinks.length;
   
   // Update pagination
   const totalPages = Math.ceil(filteredLinks.length / pageSize);
-  document.getElementById('prevPageBtn').disabled = currentPage <= 1;
-  document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
-  document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${totalPages}`;
+  if (prevPageBtn) prevPageBtn.disabled = currentPage <= 1;
+  if (nextPageBtn) nextPageBtn.disabled = currentPage >= totalPages;
+  if (pageInfo) pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
   
-  tbody.innerHTML = pageLinks.map(link => `
-    <tr>
-      <td><code>${link.id.substring(0, 8)}...</code></td>
-      <td>
-        <span class="badge badge-${link.link_mode === 'long' ? 'warning' : 'info'}">
-          ${link.link_mode || 'short'}
-        </span>
-        ${link.link_length ? `<small style="color:#666;">${link.link_length}c</small>` : ''}
-      </td>
-      <td>
-        <a href="${link.target_url}" target="_blank" rel="noopener" style="color: #8a8a8a; text-decoration: none;">
-          ${link.target_url.substring(0, 40)}${link.target_url.length > 40 ? '...' : ''}
-        </a>
-      </td>
-      <td>${new Date(link.created_at).toLocaleString()}</td>
-      <td>${new Date(link.expires_at).toLocaleString()}</td>
-      <td>
-        <span style="font-weight: 600;">${formatNumber(link.current_clicks || 0)}</span>
-        ${link.max_clicks ? '/' + formatNumber(link.max_clicks) : ''}
-      </td>
-      <td>
-        <span class="badge badge-${link.status === 'active' ? 'success' : link.status === 'expired' ? 'error' : 'warning'}">
-          ${link.status}
-        </span>
-      </td>
-      <td>
-        <div class="btn-group" style="gap: 0.25rem;">
-          <button class="btn btn-sm btn-secondary view-link" data-link-id="${link.id}" title="View Details">
-            <i class="fas fa-eye"></i>
-          </button>
-          <button class="btn btn-sm btn-secondary copy-link" data-link-id="${link.id}" title="Copy Link">
-            <i class="fas fa-copy"></i>
-          </button>
-          <button class="btn btn-sm btn-danger delete-link" data-link-id="${link.id}" title="Delete">
-            <i class="fas fa-trash"></i>
-          </button>
-        </div>
-      </td>
-    </tr>
-  `).join('');
-  
-  // Add event listeners to dynamically created buttons
-  document.querySelectorAll('.view-link').forEach(btn => {
-    btn.addEventListener('click', () => viewLink(btn.dataset.linkId));
-  });
-  
-  document.querySelectorAll('.copy-link').forEach(btn => {
-    btn.addEventListener('click', () => copyLink(btn.dataset.linkId));
-  });
-  
-  document.querySelectorAll('.delete-link').forEach(btn => {
-    btn.addEventListener('click', () => deleteLink(btn.dataset.linkId));
-  });
+  if (tbody) {
+    tbody.innerHTML = pageLinks.map(link => `
+      <tr>
+        <td><code>${link.id.substring(0, 8)}...</code></td>
+        <td>
+          <span class="badge badge-${link.link_mode === 'long' ? 'warning' : 'info'}">
+            ${link.link_mode || 'short'}
+          </span>
+          ${link.link_length ? `<small style="color:#666;">${link.link_length}c</small>` : ''}
+        </td>
+        <td>
+          <a href="${link.target_url}" target="_blank" rel="noopener" style="color: #8a8a8a; text-decoration: none;">
+            ${link.target_url.substring(0, 40)}${link.target_url.length > 40 ? '...' : ''}
+          </a>
+        </td>
+        <td>${new Date(link.created_at).toLocaleString()}</td>
+        <td>${new Date(link.expires_at).toLocaleString()}</td>
+        <td>
+          <span style="font-weight: 600;">${formatNumber(link.current_clicks || 0)}</span>
+          ${link.max_clicks ? '/' + formatNumber(link.max_clicks) : ''}
+        </td>
+        <td>
+          <span class="badge badge-${link.status === 'active' ? 'success' : link.status === 'expired' ? 'error' : 'warning'}">
+            ${link.status}
+          </span>
+        </td>
+        <td>
+          <div class="btn-group" style="gap: 0.25rem;">
+            <button class="btn btn-sm btn-secondary view-link" data-link-id="${link.id}" title="View Details">
+              <i class="fas fa-eye"></i>
+            </button>
+            <button class="btn btn-sm btn-secondary copy-link" data-link-id="${link.id}" title="Copy Link">
+              <i class="fas fa-copy"></i>
+            </button>
+            <button class="btn btn-sm btn-danger delete-link" data-link-id="${link.id}" title="Delete">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+    
+    // Add event listeners to dynamically created buttons
+    document.querySelectorAll('.view-link').forEach(btn => {
+      btn.addEventListener('click', () => viewLink(btn.dataset.linkId));
+    });
+    
+    document.querySelectorAll('.copy-link').forEach(btn => {
+      btn.addEventListener('click', () => copyLink(btn.dataset.linkId));
+    });
+    
+    document.querySelectorAll('.delete-link').forEach(btn => {
+      btn.addEventListener('click', () => deleteLink(btn.dataset.linkId));
+    });
+  }
 }
 
 // ============================================
@@ -1011,25 +1103,32 @@ async function generateLink() {
     expiresIn,
     notes,
     linkMode: selectedLinkMode,
-    _csrf: CSRF_TOKEN
+    _csrf: typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
   };
   
   // Add long link options if applicable
-  if (selectedLinkMode === 'long' || (selectedLinkMode === 'auto' && ALLOW_LINK_MODE_SWITCH)) {
+  if (selectedLinkMode === 'long' || (selectedLinkMode === 'auto' && typeof ALLOW_LINK_MODE_SWITCH !== 'undefined' && ALLOW_LINK_MODE_SWITCH)) {
+    const longLinkSegments = document.getElementById('longLinkSegments')?.value;
+    const longLinkParams = document.getElementById('longLinkParams')?.value;
+    const linkEncodingLayers = document.getElementById('linkEncodingLayers')?.value;
+    const maxEncodingIterations = document.getElementById('settingMaxEncodingIterations')?.value;
+    const enableCompression = document.getElementById('enableCompression');
+    const enableEncryption = document.getElementById('enableEncryption');
+    
     body.longLinkOptions = {
-      segments: parseInt(document.getElementById('longLinkSegments')?.value || LONG_LINK_SEGMENTS),
-      params: parseInt(document.getElementById('longLinkParams')?.value || LONG_LINK_PARAMS),
-      maxLayers: parseInt(document.getElementById('linkEncodingLayers')?.value || LINK_ENCODING_LAYERS),
-      iterations: parseInt(document.getElementById('settingMaxEncodingIterations')?.value || MAX_ENCODING_ITERATIONS),
+      segments: parseInt(longLinkSegments || (typeof LONG_LINK_SEGMENTS !== 'undefined' ? LONG_LINK_SEGMENTS : 6)),
+      params: parseInt(longLinkParams || (typeof LONG_LINK_PARAMS !== 'undefined' ? LONG_LINK_PARAMS : 13)),
+      maxLayers: parseInt(linkEncodingLayers || (typeof LINK_ENCODING_LAYERS !== 'undefined' ? LINK_ENCODING_LAYERS : 4)),
+      iterations: parseInt(maxEncodingIterations || (typeof MAX_ENCODING_ITERATIONS !== 'undefined' ? MAX_ENCODING_ITERATIONS : 3)),
       includeFingerprint: true
     };
     
     // Add compression/encryption options
-    if (document.getElementById('enableCompression')) {
-      body.longLinkOptions.compression = document.getElementById('enableCompression').checked;
+    if (enableCompression) {
+      body.longLinkOptions.compression = enableCompression.checked;
     }
-    if (document.getElementById('enableEncryption')) {
-      body.longLinkOptions.encryption = document.getElementById('enableEncryption').checked;
+    if (enableEncryption) {
+      body.longLinkOptions.encryption = enableEncryption.checked;
     }
   }
   
@@ -1038,7 +1137,7 @@ async function generateLink() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRF-Token': CSRF_TOKEN
+        'X-CSRF-Token': typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
       },
       body: JSON.stringify(body),
       credentials: 'include'
@@ -1046,27 +1145,41 @@ async function generateLink() {
     
     if (res.ok) {
       const data = await res.json();
-      document.getElementById('generatedUrl').value = data.url;
-      document.getElementById('generatedId').textContent = data.id;
-      document.getElementById('generatedExpires').textContent = data.expires_human;
-      document.getElementById('generatedPassword').textContent = data.passwordProtected ? 'Yes' : 'No';
-      document.getElementById('generatedLength').textContent = data.linkLength + ' chars';
-      document.getElementById('generatedMode').textContent = (data.mode || 'short').toUpperCase() + ' Link';
-      document.getElementById('result').style.display = 'block';
+      const generatedUrl = document.getElementById('generatedUrl');
+      const generatedId = document.getElementById('generatedId');
+      const generatedExpires = document.getElementById('generatedExpires');
+      const generatedPassword = document.getElementById('generatedPassword');
+      const generatedLength = document.getElementById('generatedLength');
+      const generatedMode = document.getElementById('generatedMode');
+      const result = document.getElementById('result');
+      const encodingDetails = document.getElementById('encodingDetails');
+      const encodingLayers = document.getElementById('encodingLayers');
+      const encodingComplexity = document.getElementById('encodingComplexity');
+      const encodingIterations = document.getElementById('encodingIterations');
+      const encodingTime = document.getElementById('encodingTime');
+      
+      if (generatedUrl) generatedUrl.value = data.url;
+      if (generatedId) generatedId.textContent = data.id;
+      if (generatedExpires) generatedExpires.textContent = data.expires_human;
+      if (generatedPassword) generatedPassword.textContent = data.passwordProtected ? 'Yes' : 'No';
+      if (generatedLength) generatedLength.textContent = data.linkLength + ' chars';
+      if (generatedMode) generatedMode.textContent = (data.mode || 'short').toUpperCase() + ' Link';
+      if (result) result.style.display = 'block';
       
       // Show encoding details for long links
-      if (data.encodingDetails) {
-        document.getElementById('encodingLayers').textContent = data.encodingDetails.layers || 0;
-        document.getElementById('encodingComplexity').textContent = data.encodingDetails.complexity || 0;
-        document.getElementById('encodingIterations').textContent = data.encodingDetails.iterations || 1;
-        document.getElementById('encodingTime').textContent = (data.encodingDetails.encodingTime || 0).toFixed(0) + 'ms';
-        document.getElementById('encodingDetails').style.display = 'block';
-      } else {
-        document.getElementById('encodingDetails').style.display = 'none';
+      if (data.encodingDetails && encodingDetails) {
+        if (encodingLayers) encodingLayers.textContent = data.encodingDetails.layers || 0;
+        if (encodingComplexity) encodingComplexity.textContent = data.encodingDetails.complexity || 0;
+        if (encodingIterations) encodingIterations.textContent = data.encodingDetails.iterations || 1;
+        if (encodingTime) encodingTime.textContent = (data.encodingDetails.encodingTime || 0).toFixed(0) + 'ms';
+        encodingDetails.style.display = 'block';
+      } else if (encodingDetails) {
+        encodingDetails.style.display = 'none';
       }
       
-      if (document.getElementById('generateQR')?.checked) {
-        const size = document.getElementById('qrSize').value;
+      const generateQR = document.getElementById('generateQR');
+      if (generateQR && generateQR.checked) {
+        const size = document.getElementById('qrSize')?.value || 300;
         await showQRForUrl(data.url, size);
       }
       
@@ -1086,7 +1199,10 @@ async function showQRForUrl(url, size = 300) {
     const res = await fetch('/qr?url=' + encodeURIComponent(url) + '&size=' + size);
     if (res.ok) {
       const data = await res.json();
-      document.getElementById('qrResult').innerHTML = `
+      const qrResult = document.getElementById('qrResult');
+      if (!qrResult) return;
+      
+      qrResult.innerHTML = `
         <img src="${data.qr}" alt="QR Code" style="max-width: 200px; border-radius: 8px; box-shadow: var(--shadow-md);">
         <div style="margin-top: 1rem;" class="btn-group">
           <button class="btn btn-sm btn-secondary download-qr" data-url="${url}" data-size="${size}">
@@ -1118,7 +1234,10 @@ function showQRModal(url, size) {
   fetch('/qr?url=' + encodeURIComponent(url) + '&size=' + (size * 2))
     .then(res => res.json())
     .then(data => {
-      document.getElementById('qrModalContent').innerHTML = `
+      const qrModalContent = document.getElementById('qrModalContent');
+      if (!qrModalContent) return;
+      
+      qrModalContent.innerHTML = `
         <img src="${data.qr}" alt="QR Code" style="max-width: 100%; border-radius: 12px;">
         <div style="margin-top: 1rem;" class="btn-group">
           <button class="btn btn-sm btn-secondary download-qr-modal" data-url="${url}" data-size="${size}">
@@ -1146,8 +1265,13 @@ async function getLinkStats() {
     const res = await fetch('/api/stats/' + linkId);
     if (res.ok) {
       const stats = await res.json();
-      document.getElementById('linkStats').style.display = 'block';
-      document.getElementById('totalClicksCount').textContent = (stats.clicks || 0) + ' clicks';
+      const linkStats = document.getElementById('linkStats');
+      const totalClicksCount = document.getElementById('totalClicksCount');
+      const statsContent = document.getElementById('statsContent');
+      const recentClicksTable = document.getElementById('recentClicksTable');
+      
+      if (linkStats) linkStats.style.display = 'block';
+      if (totalClicksCount) totalClicksCount.textContent = (stats.clicks || 0) + ' clicks';
       
       let statsHtml = '';
       if (stats.exists) {
@@ -1194,16 +1318,16 @@ async function getLinkStats() {
           </tr>
         `).join('') || '<tr><td colspan="7" style="text-align: center;">No clicks yet</td></tr>';
         
-        document.getElementById('recentClicksTable').innerHTML = recentHtml;
+        if (recentClicksTable) recentClicksTable.innerHTML = recentHtml;
         
         // Update charts
         updateAnalyticsCharts(stats);
       } else {
         statsHtml = '<div class="stat-card">Link not found or expired</div>';
-        document.getElementById('recentClicksTable').innerHTML = '';
+        if (recentClicksTable) recentClicksTable.innerHTML = '';
       }
       
-      document.getElementById('statsContent').innerHTML = statsHtml;
+      if (statsContent) statsContent.innerHTML = statsHtml;
     }
   } catch (err) {
     showAlert('Failed to get statistics', 'error');
@@ -1357,7 +1481,7 @@ async function deleteLink(linkId) {
     const res = await fetch('/api/links/' + linkId, {
       method: 'DELETE',
       headers: {
-        'X-CSRF-Token': CSRF_TOKEN
+        'X-CSRF-Token': typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
       },
       credentials: 'include'
     });
@@ -1464,38 +1588,45 @@ async function refreshSecurityData() {
 function updateSecurityTables() {
   // Login attempts
   const attemptsTable = document.getElementById('loginAttemptsTable');
-  if (securityData.activeAttacks?.length > 0) {
-    attemptsTable.innerHTML = securityData.activeAttacks.map(attack => `
-      <tr>
-        <td>${attack.ip}</td>
-        <td>${attack.attempts}</td>
-        <td>${new Date(attack.lastAttempt).toLocaleString()}</td>
-      </tr>
-    `).join('');
-  } else {
-    attemptsTable.innerHTML = '<tr><td colspan="3">No recent attempts</td></tr>';
+  if (attemptsTable) {
+    if (securityData.activeAttacks?.length > 0) {
+      attemptsTable.innerHTML = securityData.activeAttacks.map(attack => `
+        <tr>
+          <td>${attack.ip}</td>
+          <td>${attack.attempts}</td>
+          <td>${new Date(attack.lastAttempt).toLocaleString()}</td>
+        </tr>
+      `).join('');
+    } else {
+      attemptsTable.innerHTML = '<tr><td colspan="3">No recent attempts</td></tr>';
+    }
   }
   
   // Blocked IPs
   const blockedTable = document.getElementById('blockedIPsTable');
-  if (securityData.blockedIPs?.length > 0) {
-    blockedTable.innerHTML = securityData.blockedIPs.map(ip => `
-      <tr>
-        <td>${ip.ip}</td>
-        <td>${ip.reason || 'Unknown'}</td>
-        <td>${new Date(ip.expires_at).toLocaleString()}</td>
-      </tr>
-    `).join('');
-    document.getElementById('blockedCount').textContent = securityData.blockedIPs.length;
-  } else {
-    blockedTable.innerHTML = '<tr><td colspan="3">No blocked IPs</td></tr>';
-    document.getElementById('blockedCount').textContent = '0';
+  const blockedCount = document.getElementById('blockedCount');
+  
+  if (blockedTable) {
+    if (securityData.blockedIPs?.length > 0) {
+      blockedTable.innerHTML = securityData.blockedIPs.map(ip => `
+        <tr>
+          <td>${ip.ip}</td>
+          <td>${ip.reason || 'Unknown'}</td>
+          <td>${new Date(ip.expires_at).toLocaleString()}</td>
+        </tr>
+      `).join('');
+      if (blockedCount) blockedCount.textContent = securityData.blockedIPs.length;
+    } else {
+      blockedTable.innerHTML = '<tr><td colspan="3">No blocked IPs</td></tr>';
+      if (blockedCount) blockedCount.textContent = '0';
+    }
   }
   
-  document.getElementById('totalAttempts').textContent = securityData.totalAttempts || 0;
+  const totalAttempts = document.getElementById('totalAttempts');
+  if (totalAttempts) totalAttempts.textContent = securityData.totalAttempts || 0;
 }
 
-async function clearLoginAttempts() {
+function clearLoginAttempts() {
   showAlert('Login attempts cleared', 'success');
 }
 
@@ -1505,7 +1636,7 @@ async function updateBotThreshold(threshold) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRF-Token': CSRF_TOKEN
+        'X-CSRF-Token': typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
       },
       body: JSON.stringify({
         key: 'botThresholds',
@@ -1526,15 +1657,24 @@ async function updateBotThreshold(threshold) {
 // Settings Functions
 // ============================================
 async function saveLinkModeSettings() {
+  const settingLinkLengthMode = document.getElementById('settingLinkLengthMode');
+  const settingAllowLinkModeSwitch = document.getElementById('settingAllowLinkModeSwitch');
+  const settingLongLinkSegments = document.getElementById('settingLongLinkSegments');
+  const settingLongLinkParams = document.getElementById('settingLongLinkParams');
+  const settingLinkEncodingLayers = document.getElementById('settingLinkEncodingLayers');
+  const settingMaxEncodingIterations = document.getElementById('settingMaxEncodingIterations');
+  const settingEnableCompression = document.getElementById('settingEnableCompression');
+  const settingEnableEncryption = document.getElementById('settingEnableEncryption');
+  
   const settings = {
-    linkLengthMode: document.getElementById('settingLinkLengthMode').value,
-    allowLinkModeSwitch: document.getElementById('settingAllowLinkModeSwitch').checked,
-    longLinkSegments: parseInt(document.getElementById('settingLongLinkSegments').value),
-    longLinkParams: parseInt(document.getElementById('settingLongLinkParams').value),
-    linkEncodingLayers: parseInt(document.getElementById('settingLinkEncodingLayers').value),
-    maxEncodingIterations: parseInt(document.getElementById('settingMaxEncodingIterations').value),
-    enableCompression: document.getElementById('settingEnableCompression').checked,
-    enableEncryption: document.getElementById('settingEnableEncryption').checked
+    linkLengthMode: settingLinkLengthMode ? settingLinkLengthMode.value : 'short',
+    allowLinkModeSwitch: settingAllowLinkModeSwitch ? settingAllowLinkModeSwitch.checked : true,
+    longLinkSegments: parseInt(settingLongLinkSegments ? settingLongLinkSegments.value : 6),
+    longLinkParams: parseInt(settingLongLinkParams ? settingLongLinkParams.value : 13),
+    linkEncodingLayers: parseInt(settingLinkEncodingLayers ? settingLinkEncodingLayers.value : 4),
+    maxEncodingIterations: parseInt(settingMaxEncodingIterations ? settingMaxEncodingIterations.value : 3),
+    enableCompression: settingEnableCompression ? settingEnableCompression.checked : true,
+    enableEncryption: settingEnableEncryption ? settingEnableEncryption.checked : false
   };
   
   try {
@@ -1542,7 +1682,7 @@ async function saveLinkModeSettings() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-CSRF-Token': CSRF_TOKEN
+        'X-CSRF-Token': typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
       },
       body: JSON.stringify(settings),
       credentials: 'include'
@@ -1551,13 +1691,13 @@ async function saveLinkModeSettings() {
     if (res.ok) {
       showAlert('Link mode settings saved', 'success');
       
-      // Update local variables
-      if (settings.linkLengthMode) LINK_LENGTH_MODE = settings.linkLengthMode;
-      if (settings.longLinkSegments) LONG_LINK_SEGMENTS = settings.longLinkSegments;
-      if (settings.longLinkParams) LONG_LINK_PARAMS = settings.longLinkParams;
-      if (settings.linkEncodingLayers) LINK_ENCODING_LAYERS = settings.linkEncodingLayers;
+      // Update local variables (these are globals)
+      if (settings.linkLengthMode) window.LINK_LENGTH_MODE = settings.linkLengthMode;
+      if (settings.longLinkSegments) window.LONG_LINK_SEGMENTS = settings.longLinkSegments;
+      if (settings.longLinkParams) window.LONG_LINK_PARAMS = settings.longLinkParams;
+      if (settings.linkEncodingLayers) window.LINK_ENCODING_LAYERS = settings.linkEncodingLayers;
       
-      selectLinkMode(LINK_LENGTH_MODE);
+      selectLinkMode(window.LINK_LENGTH_MODE);
     } else {
       const error = await res.json();
       showAlert(error.error || 'Failed to save settings', 'error');
@@ -1568,12 +1708,18 @@ async function saveLinkModeSettings() {
 }
 
 async function saveSystemSettings() {
+  const settingLinkTTL = document.getElementById('settingLinkTTL');
+  const settingDesktopChallenge = document.getElementById('settingDesktopChallenge');
+  const settingBotDetection = document.getElementById('settingBotDetection');
+  const settingAnalytics = document.getElementById('settingAnalytics');
+  const settingLogLevel = document.getElementById('settingLogLevel');
+  
   const settings = {
-    linkTTL: parseInt(document.getElementById('settingLinkTTL').value),
-    desktopChallenge: document.getElementById('settingDesktopChallenge').checked,
-    botDetection: document.getElementById('settingBotDetection').checked,
-    analytics: document.getElementById('settingAnalytics').checked,
-    logLevel: document.getElementById('settingLogLevel').value
+    linkTTL: parseInt(settingLinkTTL ? settingLinkTTL.value : 1800),
+    desktopChallenge: settingDesktopChallenge ? settingDesktopChallenge.checked : true,
+    botDetection: settingBotDetection ? settingBotDetection.checked : true,
+    analytics: settingAnalytics ? settingAnalytics.checked : true,
+    logLevel: settingLogLevel ? settingLogLevel.value : 'info'
   };
   
   // Save each setting individually
@@ -1583,7 +1729,7 @@ async function saveSystemSettings() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-CSRF-Token': CSRF_TOKEN
+          'X-CSRF-Token': typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
         },
         body: JSON.stringify({ key, value }),
         credentials: 'include'
@@ -1601,7 +1747,7 @@ async function reloadConfig() {
     const res = await fetch('/admin/reload-config', {
       method: 'POST',
       headers: {
-        'X-CSRF-Token': CSRF_TOKEN
+        'X-CSRF-Token': typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
       },
       credentials: 'include'
     });
@@ -1679,13 +1825,14 @@ function exportAllLinks() {
 // Utility Functions
 // ============================================
 function formatNumber(num) {
+  if (num === undefined || num === null) return '0';
   if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
   if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
   return num.toString();
 }
 
 function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
+  if (bytes === 0 || !bytes) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -1693,6 +1840,7 @@ function formatBytes(bytes) {
 }
 
 function formatDuration(seconds) {
+  if (!seconds) return '0s';
   if (seconds < 60) return seconds + 's';
   if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
   if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
@@ -1700,33 +1848,48 @@ function formatDuration(seconds) {
 }
 
 function refreshLinks() {
-  socket.emit('command', { action: 'getLinks' });
+  if (socket) {
+    socket.emit('command', { action: 'getLinks' });
+  }
 }
 
 function clearForm() {
-  document.getElementById('targetUrl').value = TARGET_URL;
-  document.getElementById('linkPassword').value = '';
-  document.getElementById('maxClicks').value = '';
-  document.getElementById('linkNotes').value = '';
-  document.getElementById('expiresIn').value = '30m';
-  document.getElementById('generateQR').checked = false;
-  document.getElementById('qrSize').disabled = true;
-  document.getElementById('result').style.display = 'none';
-  document.getElementById('qrResult').innerHTML = '';
-  document.getElementById('encodingDetails').style.display = 'none';
+  const targetUrl = document.getElementById('targetUrl');
+  const linkPassword = document.getElementById('linkPassword');
+  const maxClicks = document.getElementById('maxClicks');
+  const linkNotes = document.getElementById('linkNotes');
+  const expiresIn = document.getElementById('expiresIn');
+  const generateQR = document.getElementById('generateQR');
+  const qrSize = document.getElementById('qrSize');
+  const result = document.getElementById('result');
+  const qrResult = document.getElementById('qrResult');
+  const encodingDetails = document.getElementById('encodingDetails');
+  
+  if (targetUrl) targetUrl.value = typeof TARGET_URL !== 'undefined' ? TARGET_URL : '';
+  if (linkPassword) linkPassword.value = '';
+  if (maxClicks) maxClicks.value = '';
+  if (linkNotes) linkNotes.value = '';
+  if (expiresIn) expiresIn.value = '30m';
+  if (generateQR) generateQR.checked = false;
+  if (qrSize) qrSize.disabled = true;
+  if (result) result.style.display = 'none';
+  if (qrResult) qrResult.innerHTML = '';
+  if (encodingDetails) encodingDetails.style.display = 'none';
 }
 
 function copyToClipboard() {
   const url = document.getElementById('generatedUrl');
+  if (!url) return;
+  
   url.select();
   document.execCommand('copy');
   showAlert('Copied to clipboard!', 'success');
 }
 
 function showQRFromResult() {
-  const url = document.getElementById('generatedUrl').value;
+  const url = document.getElementById('generatedUrl')?.value;
   const size = document.getElementById('qrSize')?.value || 300;
-  showQRModal(url, size);
+  if (url) showQRModal(url, size);
 }
 
 function downloadQR(url, size) {
@@ -1735,15 +1898,23 @@ function downloadQR(url, size) {
 
 function clearLogs() {
   const logs = document.getElementById('logs');
+  if (!logs) return;
+  
   logs.innerHTML = '<div class="log-entry" style="color: #7aa2f7; text-align: center;"><i class="fas fa-check-circle"></i> Logs cleared</div>';
   logCount = 0;
-  document.getElementById('logCounter').textContent = '0';
-  document.getElementById('logRate').textContent = '0 logs/sec';
+  
+  const logCounter = document.getElementById('logCounter');
+  const logRate = document.getElementById('logRate');
+  
+  if (logCounter) logCounter.textContent = '0';
+  if (logRate) logRate.textContent = '0 logs/sec';
   showAlert('Logs cleared', 'success');
 }
 
 function exportLogs() {
   const logs = document.getElementById('logs');
+  if (!logs) return;
+  
   const logEntries = [];
   
   for (const entry of logs.children) {
@@ -1796,9 +1967,9 @@ async function clearCache(type) {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'X-CSRF-Token': CSRF_TOKEN
+          'X-CSRF-Token': typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : ''
         },
-        body: JSON.stringify({ _csrf: CSRF_TOKEN }),
+        body: JSON.stringify({ _csrf: typeof CSRF_TOKEN !== 'undefined' ? CSRF_TOKEN : '' }),
         credentials: 'include'
       });
       
@@ -1809,7 +1980,9 @@ async function clearCache(type) {
       showAlert('Failed to clear cache', 'error');
     }
   } else {
-    socket.emit('command', { action });
+    if (socket) {
+      socket.emit('command', { action });
+    }
   }
 }
 
@@ -1817,19 +1990,19 @@ async function clearCache(type) {
 // Modal functions
 // ============================================
 function closeModal() {
-  document.getElementById('linkModal').classList.remove('active');
+  document.getElementById('linkModal')?.classList.remove('active');
 }
 
 function closeTestModal() {
-  document.getElementById('testModal').classList.remove('active');
+  document.getElementById('testModal')?.classList.remove('active');
 }
 
 function closeHealthModal() {
-  document.getElementById('healthModal').classList.remove('active');
+  document.getElementById('healthModal')?.classList.remove('active');
 }
 
 function closeQRModal() {
-  document.getElementById('qrModal').classList.remove('active');
+  document.getElementById('qrModal')?.classList.remove('active');
 }
 
 // ============================================
@@ -1867,7 +2040,7 @@ document.addEventListener('keydown', (e) => {
 // Handle window resize
 window.addEventListener('resize', () => {
   if (window.innerWidth > 768) {
-    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebar')?.classList.remove('open');
   }
 });
 
@@ -1902,23 +2075,22 @@ setInterval(() => {
 fetch('/health')
   .then(res => res.json())
   .then(data => {
-    if (data.queues?.redirect === 'ready') {
-      document.getElementById('queuesNavItem').style.display = 'flex';
+    const queuesNavItem = document.getElementById('queuesNavItem');
+    const dbStatus = document.getElementById('dbStatus');
+    const redisStatus = document.getElementById('redisStatus');
+    const queueStatus = document.getElementById('queueStatus');
+    
+    if (queuesNavItem && data.queues?.redirect === 'ready') {
+      queuesNavItem.style.display = 'flex';
     }
-    if (data.database) {
-      document.getElementById('dbStatus').className = 'status-dot connected';
-    } else {
-      document.getElementById('dbStatus').className = 'status-dot disconnected';
+    if (dbStatus) {
+      dbStatus.className = data.database ? 'status-dot connected' : 'status-dot disconnected';
     }
-    if (data.redis === 'connected') {
-      document.getElementById('redisStatus').className = 'status-dot connected';
-    } else {
-      document.getElementById('redisStatus').className = 'status-dot disconnected';
+    if (redisStatus) {
+      redisStatus.className = data.redis === 'connected' ? 'status-dot connected' : 'status-dot disconnected';
     }
-    if (data.queues?.redirect === 'ready') {
-      document.getElementById('queueStatus').className = 'status-dot connected';
-    } else {
-      document.getElementById('queueStatus').className = 'status-dot disconnected';
+    if (queueStatus) {
+      queueStatus.className = data.queues?.redirect === 'ready' ? 'status-dot connected' : 'status-dot disconnected';
     }
   })
   .catch(err => console.error('Health check failed:', err));
@@ -1928,6 +2100,9 @@ fetch('/health')
 // ============================================
 function init() {
   console.log('🚀 Initializing admin dashboard...');
+  console.log('Environment:', typeof NODE_ENV !== 'undefined' ? NODE_ENV : 'unknown');
+  console.log('Link Mode:', typeof LINK_LENGTH_MODE !== 'undefined' ? LINK_LENGTH_MODE : 'short');
+  
   initSocket();
   setupEventListeners();
   
@@ -1936,4 +2111,9 @@ function init() {
 }
 
 // Start the application when DOM is ready
-document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  // DOM is already loaded
+  init();
+}
