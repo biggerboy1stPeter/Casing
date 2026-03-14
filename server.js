@@ -16,7 +16,6 @@ const { Server } = require('socket.io');
 const path = require('path');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
-const multer = require('multer');
 const dotenv = require('dotenv');
 const { Pool } = require('pg');
 const Queue = require('bull');
@@ -73,14 +72,25 @@ const configSchema = Joi.object({
   DEBUG: Joi.boolean().default(false),
   BULL_BOARD_ENABLED: Joi.boolean().default(true),
   BULL_BOARD_PATH: Joi.string().default('/admin/queues'),
-  CSRF_SECRET: Joi.string().min(32).optional(),
   
   // Link mode configuration
   LINK_LENGTH_MODE: Joi.string().valid('short', 'long', 'auto').default('short'),
   ALLOW_LINK_MODE_SWITCH: Joi.boolean().default(true),
   LONG_LINK_SEGMENTS: Joi.number().integer().min(3).max(20).default(6),
   LONG_LINK_PARAMS: Joi.number().integer().min(5).max(30).default(13),
-  LINK_ENCODING_LAYERS: Joi.number().integer().min(2).max(8).default(4)
+  LINK_ENCODING_LAYERS: Joi.number().integer().min(2).max(12).default(4),
+  
+  // Enhanced encoding options
+  ENABLE_COMPRESSION: Joi.boolean().default(true),
+  ENABLE_ENCRYPTION: Joi.boolean().default(false),
+  ENCRYPTION_KEY: Joi.string().when('ENABLE_ENCRYPTION', { is: true, then: Joi.required() }),
+  MAX_ENCODING_ITERATIONS: Joi.number().integer().min(1).max(5).default(3),
+  ENCODING_COMPLEXITY_THRESHOLD: Joi.number().integer().min(10).max(100).default(50),
+  
+  // Rate limiting
+  RATE_LIMIT_WINDOW: Joi.number().default(60000),
+  RATE_LIMIT_MAX_REQUESTS: Joi.number().default(100),
+  ENCODING_RATE_LIMIT: Joi.number().default(10)
 });
 
 const { error: configError, value: validatedConfig } = configSchema.validate(process.env, {
@@ -104,8 +114,8 @@ const logger = createLogger({
   ),
   defaultMeta: { service: 'redirector-pro' },
   transports: [
-    new transports.File({ filename: 'error.log', level: 'error' }),
-    new transports.File({ filename: 'combined.log' }),
+    new transports.File({ filename: 'logs/error.log', level: 'error', maxsize: 10485760, maxFiles: 10 }),
+    new transports.File({ filename: 'logs/combined.log', maxsize: 10485760, maxFiles: 20 }),
     new transports.Console({
       format: format.combine(
         format.colorize(),
@@ -152,9 +162,32 @@ const linkModeCounter = new promClient.Counter({
   labelNames: ['mode']
 });
 
+const encodingComplexityGauge = new promClient.Gauge({
+  name: 'encoding_complexity',
+  help: 'Encoding complexity metrics',
+  labelNames: ['type']
+});
+
+const encodingDurationHistogram = new promClient.Histogram({
+  name: 'encoding_duration_seconds',
+  help: 'Time spent encoding links',
+  labelNames: ['mode', 'layers', 'iterations'],
+  buckets: [0.1, 0.5, 1, 2, 5, 10]
+});
+
 // ─── App Initialization ──────────────────────────────────────────────────────
 const app = express();
 const server = http.createServer(app);
+
+// Create logs directory if it doesn't exist
+(async () => {
+  try {
+    await fs.mkdir('logs', { recursive: true });
+    await fs.mkdir('public', { recursive: true });
+  } catch (err) {
+    // Directories already exist
+  }
+})();
 
 // ─── Redis Connection ────────────────────────────────────────────────────────
 let redisClient;
@@ -198,6 +231,7 @@ if (validatedConfig.REDIS_URL && validatedConfig.REDIS_URL.startsWith('redis://'
 let redirectQueue;
 let emailQueue;
 let analyticsQueue;
+let encodingQueue;
 let serverAdapter;
 let bullBoard;
 
@@ -233,8 +267,17 @@ if (redisClient) {
     }
   });
 
+  encodingQueue = new Queue('encoding processing', {
+    redis: redisClient,
+    defaultJobOptions: {
+      attempts: 2,
+      timeout: 30000,
+      removeOnComplete: true
+    }
+  });
+
   redirectQueue.process(async (job) => {
-    const { linkId, ip, userAgent, deviceInfo, country, linkMode } = job.data;
+    const { linkId, ip, userAgent, deviceInfo, country, linkMode, encodingLayers } = job.data;
     await logToDatabase({
       type: 'redirect',
       linkId,
@@ -243,6 +286,7 @@ if (redisClient) {
       deviceInfo,
       country,
       linkMode,
+      encodingLayers,
       timestamp: new Date()
     });
     return { success: true };
@@ -263,6 +307,21 @@ if (redisClient) {
     return { processed: true };
   });
 
+  encodingQueue.process(async (job) => {
+    const { targetUrl, req, options } = job.data;
+    const startTime = Date.now();
+    try {
+      const result = await generateLongLink(targetUrl, req, options);
+      encodingDurationHistogram
+        .labels('long', options.maxLayers || LINK_ENCODING_LAYERS, options.iterations || MAX_ENCODING_ITERATIONS)
+        .observe((Date.now() - startTime) / 1000);
+      return result;
+    } catch (err) {
+      logger.error('Encoding queue processing error:', err);
+      throw err;
+    }
+  });
+
   if (validatedConfig.BULL_BOARD_ENABLED) {
     serverAdapter = new ExpressAdapter();
     serverAdapter.setBasePath(validatedConfig.BULL_BOARD_PATH);
@@ -271,7 +330,8 @@ if (redisClient) {
       queues: [
         new BullAdapter(redirectQueue),
         new BullAdapter(emailQueue),
-        new BullAdapter(analyticsQueue)
+        new BullAdapter(analyticsQueue),
+        new BullAdapter(encodingQueue)
       ],
       serverAdapter: serverAdapter,
       options: {
@@ -299,13 +359,11 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
       ssl: validatedConfig.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
       max: 20,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000
+      connectionTimeoutMillis: 5000
     });
 
     dbPool.on('error', (err) => {
-      if (validatedConfig.DEBUG) {
-        logger.error('Unexpected database error:', err);
-      }
+      logger.error('Unexpected database error:', err);
     });
 
     // Create tables with proper schema and error handling
@@ -313,7 +371,6 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
       try {
         logger.info('📦 Creating database tables...');
         
-        // Step 1: Create all tables without indexes
         await dbPool.query(`
           CREATE TABLE IF NOT EXISTS links (
             id VARCHAR(64) PRIMARY KEY,
@@ -328,7 +385,9 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
             status VARCHAR(20) DEFAULT 'active',
             link_mode VARCHAR(10) DEFAULT 'short',
             link_metadata JSONB DEFAULT '{}',
-            metadata JSONB DEFAULT '{}'
+            encoding_metadata JSONB DEFAULT '{}',
+            metadata JSONB DEFAULT '{}',
+            encoding_complexity INTEGER DEFAULT 0
           );
         `);
         
@@ -343,6 +402,8 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
             city TEXT,
             referer TEXT,
             link_mode VARCHAR(10),
+            encoding_layers INTEGER,
+            decoding_time_ms INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
         `);
@@ -384,42 +445,7 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
 
         logger.info('✅ Tables created successfully');
 
-        // Step 2: Verify and add any missing columns
-        try {
-          // Check if link_mode column exists in links table
-          const linkModeCheck = await dbPool.query(`
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name='links' AND column_name='link_mode'
-          `);
-          
-          if (linkModeCheck.rows.length === 0) {
-            logger.info('Adding link_mode column to links table...');
-            await dbPool.query(`ALTER TABLE links ADD COLUMN link_mode VARCHAR(10) DEFAULT 'short'`);
-            logger.info('✅ Added link_mode column');
-          }
-        } catch (err) {
-          logger.warn('Could not verify/add link_mode column:', err.message);
-        }
-
-        try {
-          // Check if link_metadata column exists
-          const linkMetadataCheck = await dbPool.query(`
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name='links' AND column_name='link_metadata'
-          `);
-          
-          if (linkMetadataCheck.rows.length === 0) {
-            logger.info('Adding link_metadata column to links table...');
-            await dbPool.query(`ALTER TABLE links ADD COLUMN link_metadata JSONB DEFAULT '{}'`);
-            logger.info('✅ Added link_metadata column');
-          }
-        } catch (err) {
-          logger.warn('Could not verify/add link_metadata column:', err.message);
-        }
-
-        // Step 3: Create indexes separately
+        // Create indexes
         const indexes = [
           { name: 'idx_links_expires', query: 'CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at);' },
           { name: 'idx_links_status', query: 'CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);' },
@@ -428,6 +454,7 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
           { name: 'idx_clicks_ip', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_ip ON clicks(ip);' },
           { name: 'idx_clicks_created', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);' },
           { name: 'idx_clicks_mode', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_mode ON clicks(link_mode);' },
+          { name: 'idx_clicks_encoding', query: 'CREATE INDEX IF NOT EXISTS idx_clicks_encoding ON clicks(encoding_layers);' },
           { name: 'idx_analytics_type', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_type ON analytics(type);' },
           { name: 'idx_analytics_created', query: 'CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics(created_at);' },
           { name: 'idx_blocked_ips_expires', query: 'CREATE INDEX IF NOT EXISTS idx_blocked_ips_expires ON blocked_ips(expires_at);' }
@@ -448,9 +475,7 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
       }
     };
 
-    // Run table creation in the background
     createTables();
-    
     logger.info('✅ Database connected');
   } catch (err) {
     logger.warn('Database connection failed, continuing without database:', err.message);
@@ -462,7 +487,6 @@ if (validatedConfig.DATABASE_URL && validatedConfig.DATABASE_URL.startsWith('pos
 
 async function logToDatabase(entry) {
   if (!dbPool) return;
-  
   try {
     const query = 'INSERT INTO logs (data) VALUES ($1)';
     await dbPool.query(query, [JSON.stringify(entry)]);
@@ -506,7 +530,8 @@ const io = new Server(server, {
   },
   pingTimeout: 60000,
   pingInterval: 25000,
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
+  maxHttpBufferSize: 1e6
 });
 
 // ─── Session Setup ───────────────────────────────────────────────────────────
@@ -519,7 +544,8 @@ app.use(xss());
 app.use(hpp());
 app.use(cors({
   origin: validatedConfig.CORS_ORIGIN ? validatedConfig.CORS_ORIGIN.split(',') : "*",
-  credentials: true
+  credentials: true,
+  maxAge: 86400
 }));
 app.use(cookieParser(validatedConfig.SESSION_SECRET));
 
@@ -542,20 +568,17 @@ app.use(session({
 
 // ─── Security Middleware - Block URL Parameters with Credentials ───────────
 app.use((req, res, next) => {
-  // Block any requests with username or password in query parameters
-  if (req.query.username || req.query.password) {
+  if (req.query.username || req.query.password || req.query.pass || req.query.pwd) {
     logger.error('🚫 Blocked request with credentials in URL', {
       ip: req.ip,
       path: req.path,
       query: Object.keys(req.query)
     });
     
-    // If it's a login page request, redirect to clean URL
     if (req.path === '/admin/login') {
       return res.redirect('/admin/login');
     }
     
-    // Otherwise return error
     return res.status(400).json({ 
       error: 'Invalid request format - credentials should not be in URL',
       code: 'CREDENTIALS_IN_URL'
@@ -630,8 +653,8 @@ const BOT_URLS = validatedConfig.BOT_URLS ?
     'https://www.bbc.com'
   ];
 
-const LOG_FILE = 'clicks.log';
-const REQUEST_LOG_FILE = 'requests.log';
+const LOG_FILE = 'logs/clicks.log';
+const REQUEST_LOG_FILE = 'logs/requests.log';
 const PORT = validatedConfig.PORT;
 
 const ADMIN_USERNAME = validatedConfig.ADMIN_USERNAME;
@@ -644,9 +667,15 @@ const LONG_LINK_SEGMENTS = validatedConfig.LONG_LINK_SEGMENTS;
 const LONG_LINK_PARAMS = validatedConfig.LONG_LINK_PARAMS;
 const LINK_ENCODING_LAYERS = validatedConfig.LINK_ENCODING_LAYERS;
 
+// Enhanced encoding options
+const ENABLE_COMPRESSION = validatedConfig.ENABLE_COMPRESSION;
+const ENABLE_ENCRYPTION = validatedConfig.ENABLE_ENCRYPTION;
+const ENCRYPTION_KEY = validatedConfig.ENCRYPTION_KEY;
+const MAX_ENCODING_ITERATIONS = validatedConfig.MAX_ENCODING_ITERATIONS;
+const ENCODING_COMPLEXITY_THRESHOLD = validatedConfig.ENCODING_COMPLEXITY_THRESHOLD;
+
 function parseTTL(ttlValue) {
   const defaultTTL = 1800;
-  
   if (!ttlValue) return defaultTTL;
   
   const match = String(ttlValue).match(/^(\d+)([smhd])?$/i);
@@ -693,7 +722,7 @@ const linkRequestCache = new NodeCache({ stdTTL: 60, checkperiod: 10, useClones:
 const failCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 10000 });
 const deviceCache = new NodeCache({ stdTTL: 300, checkperiod: 60, useClones: false, maxKeys: 50000 });
 const qrCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, useClones: false, maxKeys: 1000 });
-const encodingConfigCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
+const encodingCache = new NodeCache({ stdTTL: 3600, checkperiod: 600, maxKeys: 5000 });
 
 // Login attempt tracking
 const loginAttempts = new Map();
@@ -702,7 +731,7 @@ const loginAttempts = new Map();
 setInterval(() => {
   const now = Date.now();
   for (const [ip, data] of loginAttempts.entries()) {
-    if (now - data.lastAttempt > 3600000) { // 1 hour
+    if (now - data.lastAttempt > 3600000) {
       loginAttempts.delete(ip);
     }
   }
@@ -728,6 +757,15 @@ const stats = {
     min: Infinity,
     max: 0,
     total: 0
+  },
+  encodingStats: {
+    avgLayers: 0,
+    avgLength: 0,
+    totalEncoded: 0,
+    avgComplexity: 0,
+    totalComplexity: 0,
+    avgDecodeTime: 0,
+    totalDecodeTime: 0
   },
   realtime: {
     lastMinute: [],
@@ -756,13 +794,12 @@ io.use((socket, next) => {
   logger.info('Admin client connected:', socket.id);
   activeConnections.inc();
   
-  // Update cache stats
   stats.caches = {
     geo: geoCache.keys().length,
     linkReq: linkCache.keys().length,
     device: deviceCache.keys().length,
     qr: qrCache.keys().length,
-    encoding: encodingConfigCache.keys().length
+    encoding: encodingCache.keys().length
   };
   
   socket.emit('stats', stats);
@@ -777,6 +814,10 @@ io.use((socket, next) => {
     longLinkSegments: LONG_LINK_SEGMENTS,
     longLinkParams: LONG_LINK_PARAMS,
     linkEncodingLayers: LINK_ENCODING_LAYERS,
+    enableCompression: ENABLE_COMPRESSION,
+    enableEncryption: ENABLE_ENCRYPTION,
+    maxEncodingIterations: MAX_ENCODING_ITERATIONS,
+    encodingComplexityThreshold: ENCODING_COMPLEXITY_THRESHOLD,
     uptime: process.uptime()
   });
 
@@ -793,14 +834,8 @@ io.use((socket, next) => {
           geoCache.flushAll();
           deviceCache.flushAll();
           qrCache.flushAll();
-          encodingConfigCache.flushAll();
-          stats.caches = {
-            geo: 0,
-            linkReq: 0,
-            device: 0,
-            qr: 0,
-            encoding: 0
-          };
+          encodingCache.flushAll();
+          stats.caches = { geo: 0, linkReq: 0, device: 0, qr: 0, encoding: 0 };
           socket.emit('notification', { type: 'success', message: 'Cache cleared successfully' });
           break;
         case 'clearGeoCache':
@@ -812,6 +847,11 @@ io.use((socket, next) => {
           qrCache.flushAll();
           stats.caches.qr = 0;
           socket.emit('notification', { type: 'success', message: 'QR cache cleared' });
+          break;
+        case 'clearEncodingCache':
+          encodingCache.flushAll();
+          stats.caches.encoding = 0;
+          socket.emit('notification', { type: 'success', message: 'Encoding cache cleared' });
           break;
         case 'getStats':
           socket.emit('stats', stats);
@@ -828,7 +868,9 @@ io.use((socket, next) => {
             allowLinkModeSwitch: ALLOW_LINK_MODE_SWITCH,
             longLinkSegments: LONG_LINK_SEGMENTS,
             longLinkParams: LONG_LINK_PARAMS,
-            linkEncodingLayers: LINK_ENCODING_LAYERS
+            linkEncodingLayers: LINK_ENCODING_LAYERS,
+            enableCompression: ENABLE_COMPRESSION,
+            enableEncryption: ENABLE_ENCRYPTION
           });
           break;
         case 'getLinks':
@@ -854,7 +896,7 @@ setInterval(() => {
     linkReq: linkCache.keys().length,
     device: deviceCache.keys().length,
     qr: qrCache.keys().length,
-    encoding: encodingConfigCache.keys().length
+    encoding: encodingCache.keys().length
   };
   
   const now = Date.now();
@@ -906,7 +948,8 @@ function getDeviceInfo(req) {
     'spider', 'burp', 'sqlmap', 'curl', 'wget', 'python', 'perl', 'ruby', 
     'go-http-client', 'java', 'okhttp', 'scrapy', 'httpclient', 'axios',
     'node-fetch', 'php', 'libwww', 'wget', 'fetch', 'ahrefs', 'semrush',
-    'puppeteer', 'selenium', 'playwright', 'cypress'
+    'puppeteer', 'selenium', 'playwright', 'cypress', 'headless', 'pupeteer',
+    'chrome-lighthouse', 'lighthouse', 'pagespeed', 'webpage', 'gtmetrix'
   ];
   
   if (botPatterns.some(pattern => uaLower.includes(pattern))) {
@@ -984,6 +1027,8 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', req.id);
   res.setHeader('X-Device-Type', req.deviceInfo.type);
   res.setHeader('X-Powered-By', 'Redirector-Pro');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   
   totalRequests.inc();
   stats.totalRequests++;
@@ -1058,8 +1103,8 @@ app.use(helmet({
   hidePoweredBy: true
 }));
 
-app.use(express.json({ limit: '50kb' }));
-app.use(express.urlencoded({ extended: true, limit: '50kb' }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
 // Rate Limiting
 const speedLimiter = slowDown({
@@ -1085,6 +1130,15 @@ const strictLimiter = rateLimit({
   handler: (req, res) => {
     logRequest('rate-limit', req, res, { limit: req.rateLimit.limit });
     res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
+  }
+});
+
+const encodingLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: validatedConfig.ENCODING_RATE_LIMIT,
+  keyGenerator: (req) => req.session?.user || req.ip || 'unknown',
+  handler: (req, res) => {
+    res.status(429).json({ error: 'Too many encoding requests. Please slow down.' });
   }
 });
 
@@ -1237,25 +1291,57 @@ async function getCountryCode(req) {
   return 'XX';
 }
 
-// ─── COMPLETE ENCODING/DECODING SYSTEM FOR LONG LINKS ────────────────────────
+// ─── ENHANCED ENCODING/DECODING SYSTEM FOR LONG LINKS ────────────────────────
 
-// Enhanced encoders with more variety for longer links
-const longLinkEncoders = [
+// Extended encoder library with more algorithms
+const encoderLibrary = [
+  // Base64 variants
   { 
-    name: 'base64', 
+    name: 'base64_standard', 
     enc: s => Buffer.from(s).toString('base64'), 
-    dec: s => Buffer.from(s, 'base64').toString() 
+    dec: s => Buffer.from(s, 'base64').toString(),
+    complexity: 1
   },
   { 
-    name: 'base64url', 
+    name: 'base64_url', 
     enc: s => Buffer.from(s).toString('base64url'), 
-    dec: s => Buffer.from(s, 'base64url').toString() 
+    dec: s => Buffer.from(s, 'base64url').toString(),
+    complexity: 1
   },
   { 
     name: 'base64_reverse', 
     enc: s => Buffer.from(s.split('').reverse().join('')).toString('base64'), 
-    dec: s => Buffer.from(s, 'base64').toString().split('').reverse().join('')
+    dec: s => Buffer.from(s, 'base64').toString().split('').reverse().join(''),
+    complexity: 2
   },
+  { 
+    name: 'base64_mime', 
+    enc: s => Buffer.from(s).toString('base64').replace(/.{76}/g, '$&\n'), 
+    dec: s => Buffer.from(s.replace(/\n/g, ''), 'base64').toString(),
+    complexity: 2
+  },
+  
+  // Hexadecimal variants
+  { 
+    name: 'hex_lower', 
+    enc: s => Buffer.from(s).toString('hex'), 
+    dec: s => Buffer.from(s, 'hex').toString(),
+    complexity: 1
+  },
+  { 
+    name: 'hex_upper', 
+    enc: s => Buffer.from(s).toString('hex').toUpperCase(), 
+    dec: s => Buffer.from(s.toLowerCase(), 'hex').toString(),
+    complexity: 1
+  },
+  { 
+    name: 'hex_reverse', 
+    enc: s => Buffer.from(s).toString('hex').split('').reverse().join(''), 
+    dec: s => Buffer.from(s.split('').reverse().join(''), 'hex').toString(),
+    complexity: 2
+  },
+  
+  // ROT ciphers
   { 
     name: 'rot13', 
     enc: s => s.replace(/[a-zA-Z]/g, c => 
@@ -1263,52 +1349,142 @@ const longLinkEncoders = [
     ), 
     dec: s => s.replace(/[a-zA-Z]/g, c => 
       String.fromCharCode((c <= 'Z' ? 90 : 122) >= (c = c.charCodeAt(0) - 13) ? c : c + 26)
-    ) 
+    ),
+    complexity: 2
   },
   { 
     name: 'rot5', 
     enc: s => s.replace(/[0-9]/g, c => ((parseInt(c) + 5) % 10).toString()), 
-    dec: s => s.replace(/[0-9]/g, c => ((parseInt(c) - 5 + 10) % 10).toString())
+    dec: s => s.replace(/[0-9]/g, c => ((parseInt(c) - 5 + 10) % 10).toString()),
+    complexity: 1
   },
   { 
-    name: 'hex', 
-    enc: s => Buffer.from(s).toString('hex'), 
-    dec: s => Buffer.from(s, 'hex').toString() 
+    name: 'rot13_rot5_combo', 
+    enc: s => {
+      const rot13 = s.replace(/[a-zA-Z]/g, c => 
+        String.fromCharCode((c <= 'Z' ? 90 : 122) >= (c = c.charCodeAt(0) + 13) ? c : c - 26)
+      );
+      return rot13.replace(/[0-9]/g, c => ((parseInt(c) + 5) % 10).toString());
+    }, 
+    dec: s => {
+      const rot5 = s.replace(/[0-9]/g, c => ((parseInt(c) - 5 + 10) % 10).toString());
+      return rot5.replace(/[a-zA-Z]/g, c => 
+        String.fromCharCode((c <= 'Z' ? 90 : 122) >= (c = c.charCodeAt(0) - 13) ? c : c + 26)
+      );
+    },
+    complexity: 3
   },
+  
+  // URL encoding
   { 
-    name: 'hex_reverse', 
-    enc: s => Buffer.from(s).toString('hex').split('').reverse().join(''), 
-    dec: s => Buffer.from(s.split('').reverse().join(''), 'hex').toString() 
-  },
-  { 
-    name: 'urlencode', 
+    name: 'url_encode', 
     enc: encodeURIComponent, 
-    dec: decodeURIComponent 
+    dec: decodeURIComponent,
+    complexity: 1
   },
   { 
-    name: 'double_urlencode', 
+    name: 'double_url_encode', 
     enc: s => encodeURIComponent(encodeURIComponent(s)), 
-    dec: s => decodeURIComponent(decodeURIComponent(s))
+    dec: s => decodeURIComponent(decodeURIComponent(s)),
+    complexity: 2
   },
   { 
-    name: 'ascii_shift', 
+    name: 'triple_url_encode', 
+    enc: s => encodeURIComponent(encodeURIComponent(encodeURIComponent(s))), 
+    dec: s => decodeURIComponent(decodeURIComponent(decodeURIComponent(s))),
+    complexity: 3
+  },
+  
+  // ASCII transformations
+  { 
+    name: 'ascii_shift_1', 
+    enc: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) + 1)).join(''), 
+    dec: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 1)).join(''),
+    complexity: 1
+  },
+  { 
+    name: 'ascii_shift_3', 
     enc: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) + 3)).join(''), 
-    dec: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 3)).join('')
+    dec: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 3)).join(''),
+    complexity: 1
   },
   { 
-    name: 'binary', 
-    enc: s => s.split('').map(c => c.charCodeAt(0).toString(2).padStart(8, '0')).join(''), 
-    dec: s => s.match(/.{1,8}/g).map(b => String.fromCharCode(parseInt(b, 2))).join('')
+    name: 'ascii_shift_5', 
+    enc: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) + 5)).join(''), 
+    dec: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 5)).join(''),
+    complexity: 1
   },
+  { 
+    name: 'ascii_xor', 
+    enc: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ 0x2A)).join(''), 
+    dec: s => s.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ 0x2A)).join(''),
+    complexity: 2
+  },
+  
+  // Binary representations
+  { 
+    name: 'binary_8bit', 
+    enc: s => s.split('').map(c => c.charCodeAt(0).toString(2).padStart(8, '0')).join(''), 
+    dec: s => s.match(/.{1,8}/g).map(b => String.fromCharCode(parseInt(b, 2))).join(''),
+    complexity: 4
+  },
+  { 
+    name: 'binary_16bit', 
+    enc: s => s.split('').map(c => c.charCodeAt(0).toString(2).padStart(16, '0')).join(''), 
+    dec: s => s.match(/.{1,16}/g).map(b => String.fromCharCode(parseInt(b, 2))).join(''),
+    complexity: 4
+  },
+  
+  // Octal
   { 
     name: 'octal', 
     enc: s => s.split('').map(c => c.charCodeAt(0).toString(8)).join(' '), 
-    dec: s => s.split(' ').map(o => String.fromCharCode(parseInt(o, 8))).join('')
+    dec: s => s.split(' ').map(o => String.fromCharCode(parseInt(o, 8))).join(''),
+    complexity: 3
   },
+  
+  // Reverse
   { 
     name: 'reverse', 
     enc: s => s.split('').reverse().join(''), 
-    dec: s => s.split('').reverse().join('')
+    dec: s => s.split('').reverse().join(''),
+    complexity: 1
+  },
+  
+  // Caesar cipher with different shifts
+  { 
+    name: 'caesar_3', 
+    enc: s => s.replace(/[a-zA-Z]/g, c => {
+      const code = c.charCodeAt(0);
+      if (code >= 65 && code <= 90) return String.fromCharCode(((code - 65 + 3) % 26) + 65);
+      if (code >= 97 && code <= 122) return String.fromCharCode(((code - 97 + 3) % 26) + 97);
+      return c;
+    }), 
+    dec: s => s.replace(/[a-zA-Z]/g, c => {
+      const code = c.charCodeAt(0);
+      if (code >= 65 && code <= 90) return String.fromCharCode(((code - 65 - 3 + 26) % 26) + 65);
+      if (code >= 97 && code <= 122) return String.fromCharCode(((code - 97 - 3 + 26) % 26) + 97);
+      return c;
+    }),
+    complexity: 2
+  },
+  
+  // Atbash cipher
+  { 
+    name: 'atbash', 
+    enc: s => s.replace(/[a-zA-Z]/g, c => {
+      const code = c.charCodeAt(0);
+      if (code >= 65 && code <= 90) return String.fromCharCode(90 - (code - 65));
+      if (code >= 97 && code <= 122) return String.fromCharCode(122 - (code - 97));
+      return c;
+    }), 
+    dec: s => s.replace(/[a-zA-Z]/g, c => {
+      const code = c.charCodeAt(0);
+      if (code >= 65 && code <= 90) return String.fromCharCode(90 - (code - 65));
+      if (code >= 97 && code <= 122) return String.fromCharCode(122 - (code - 97));
+      return c;
+    }),
+    complexity: 2
   }
 ];
 
@@ -1338,189 +1514,353 @@ function multiLayerEncode(str) {
 }
 
 /**
- * Multi-layer encoding function for long links
- * Takes a string and applies multiple random encoding layers
- * Returns encoded string, layers used, and noise added
+ * Enhanced compression function
  */
-function longLinkMultiLayerEncode(str, options = {}) {
+function compressData(data) {
+  if (!ENABLE_COMPRESSION) return data;
+  try {
+    return Buffer.from(data).toString('base64');
+  } catch (err) {
+    logger.warn('Compression failed:', err);
+    return data;
+  }
+}
+
+/**
+ * Enhanced decompression function
+ */
+function decompressData(data) {
+  if (!ENABLE_COMPRESSION) return data;
+  try {
+    return Buffer.from(data, 'base64').toString();
+  } catch (err) {
+    logger.warn('Decompression failed:', err);
+    return data;
+  }
+}
+
+/**
+ * Encryption function with proper key derivation
+ */
+function encryptData(data) {
+  if (!ENABLE_ENCRYPTION || !ENCRYPTION_KEY) return data;
+  try {
+    const iv = crypto.randomBytes(16);
+    const key = crypto.pbkdf2Sync(ENCRYPTION_KEY, 'redirector-salt', 100000, 32, 'sha256');
+    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+    let encrypted = cipher.update(data, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return iv.toString('hex') + ':' + encrypted;
+  } catch (err) {
+    logger.warn('Encryption failed:', err);
+    return data;
+  }
+}
+
+/**
+ * Decryption function with proper key derivation
+ */
+function decryptData(data) {
+  if (!ENABLE_ENCRYPTION || !ENCRYPTION_KEY) return data;
+  try {
+    if (!data.includes(':')) return data;
+    const [ivHex, encrypted] = data.split(':');
+    const iv = Buffer.from(ivHex, 'hex');
+    const key = crypto.pbkdf2Sync(ENCRYPTION_KEY, 'redirector-salt', 100000, 32, 'sha256');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (err) {
+    logger.warn('Decryption failed:', err);
+    return data;
+  }
+}
+
+/**
+ * Advanced multi-layer encoding function for long links
+ */
+function advancedMultiLayerEncode(str, options = {}) {
   const {
     minLayers = 4,
-    maxLayers = 8,
-    minNoiseBytes = 6,
-    maxNoiseBytes = 16,
-    includeMetadata = true
+    maxLayers = LINK_ENCODING_LAYERS,
+    minNoiseBytes = 8,
+    maxNoiseBytes = 24,
+    iterations = MAX_ENCODING_ITERATIONS
   } = options;
   
   let result = str;
-  const layers = [];
+  const encodingLayers = [];
+  const encodingMetadata = {
+    layers: [],
+    noise: [],
+    iterations: iterations,
+    complexity: 0,
+    timestamp: Date.now(),
+    version: '3.0'
+  };
   
-  // Generate random noise (variable length)
-  const noiseBytes = minNoiseBytes + Math.floor(Math.random() * (maxNoiseBytes - minNoiseBytes + 1));
-  const noise = crypto.randomBytes(noiseBytes).toString('hex');
-  
-  // Add noise to both ends of the string
-  result = noise + result + noise;
-
-  // Shuffle encoders randomly
-  const shuffled = [...longLinkEncoders].sort(() => Math.random() - 0.5);
-  
-  // Select random number of encoders
-  const layerCount = minLayers + Math.floor(Math.random() * (maxLayers - minLayers + 1));
-  const selected = shuffled.slice(0, layerCount);
-
-  // Apply each encoder sequentially
-  for (const layer of selected) {
-    result = layer.enc(result);
-    layers.push(layer.name);
+  // Apply multiple encoding iterations
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    // Generate random noise for this iteration
+    const noiseBytes = minNoiseBytes + Math.floor(Math.random() * (maxNoiseBytes - minNoiseBytes + 1));
+    const noise = crypto.randomBytes(noiseBytes).toString('base64url');
+    
+    // Add noise to both ends
+    result = noise + result + noise;
+    encodingMetadata.noise.push(noise);
+    
+    // Shuffle encoders and select random subset
+    const shuffled = [...encoderLibrary].sort(() => Math.random() - 0.5);
+    const layerCount = minLayers + Math.floor(Math.random() * (maxLayers - minLayers + 1));
+    const selectedLayers = shuffled.slice(0, layerCount);
+    
+    // Apply each encoder
+    for (const layer of selectedLayers) {
+      result = layer.enc(result);
+      encodingLayers.push(layer.name);
+      encodingMetadata.layers.push(layer.name);
+      encodingMetadata.complexity += layer.complexity || 1;
+    }
+    
+    // Add separator between iterations
+    if (iteration < iterations - 1) {
+      const separator = crypto.randomBytes(4).toString('hex');
+      const reversed = Buffer.from(result).reverse().toString('utf8').substring(0, 10);
+      result = result + separator + reversed;
+    }
   }
-
-  // Triple URL encode the result
+  
+  // Apply compression if enabled
+  if (ENABLE_COMPRESSION) {
+    result = compressData(result);
+    encodingMetadata.compressed = true;
+  }
+  
+  // Apply encryption if enabled
+  if (ENABLE_ENCRYPTION) {
+    result = encryptData(result);
+    encodingMetadata.encrypted = true;
+  }
+  
+  // Final URL encoding
   result = encodeURIComponent(result);
   result = encodeURIComponent(result);
   result = encodeURIComponent(result);
-
-  // Return encoded data and metadata
-  return { 
-    encoded: result, 
-    layers: layers.reverse(), // Store in reverse for decoding
-    noise,
-    layerCount: layers.length,
-    totalLength: result.length
+  
+  // Update metrics
+  encodingComplexityGauge.labels('complexity').set(encodingMetadata.complexity);
+  
+  return {
+    encoded: result,
+    layers: encodingLayers.reverse(),
+    metadata: encodingMetadata,
+    totalLength: result.length,
+    complexity: encodingMetadata.complexity
   };
 }
 
 /**
- * Multi-layer decoding function for long links
- * Takes encoded string, layers, and noise to reconstruct original
+ * Advanced multi-layer decoding function
  */
-function longLinkMultiLayerDecode(encoded, layers, noise) {
+function advancedMultiLayerDecode(encoded, metadata) {
   let result = encoded;
+  const startTime = Date.now();
   
-  // Triple URL decode
-  result = decodeURIComponent(result);
-  result = decodeURIComponent(result);
-  result = decodeURIComponent(result);
-
-  // Apply decoders in the order they were stored
-  for (const layerName of layers) {
-    const layer = longLinkEncoders.find(e => e.name === layerName);
-    if (!layer) throw new Error(`Unknown layer: ${layerName}`);
-    result = layer.dec(result);
+  try {
+    // Triple URL decode
+    result = decodeURIComponent(result);
+    result = decodeURIComponent(result);
+    result = decodeURIComponent(result);
+    
+    // Decrypt if enabled
+    if (metadata.encrypted) {
+      result = decryptData(result);
+    }
+    
+    // Decompress if enabled
+    if (metadata.compressed) {
+      result = decompressData(result);
+    }
+    
+    // Apply decoders in reverse order
+    const layers = [...metadata.layers].reverse();
+    for (const layerName of layers) {
+      const layer = encoderLibrary.find(e => e.name === layerName);
+      if (!layer) throw new Error(`Unknown layer: ${layerName}`);
+      result = layer.dec(result);
+    }
+    
+    // Remove noise from all iterations
+    if (metadata.noise && Array.isArray(metadata.noise)) {
+      for (const noise of metadata.noise) {
+        if (result.startsWith(noise) && result.endsWith(noise)) {
+          result = result.slice(noise.length, -noise.length);
+        }
+      }
+    }
+    
+    const decodeTime = Date.now() - startTime;
+    stats.encodingStats.avgDecodeTime = (stats.encodingStats.avgDecodeTime * stats.encodingStats.totalDecodeTime + decodeTime) / (stats.encodingStats.totalDecodeTime + 1);
+    stats.encodingStats.totalDecodeTime++;
+    
+    return result;
+  } catch (err) {
+    logger.error('Advanced decode error:', err);
+    throw new AppError('Decoding failed', 400, true);
   }
-
-  // Remove noise from both ends if present
-  if (noise && result.startsWith(noise) && result.endsWith(noise)) {
-    result = result.slice(noise.length, -noise.length);
-  }
-
-  return result;
 }
 
 /**
- * Generate long tracking link
- * Creates heavily obfuscated URL with multiple path segments and parameters
+ * Generate long tracking link with enhanced encoding
  */
 async function generateLongLink(targetUrl, req, options = {}) {
+  const startTime = Date.now();
+  
   const {
     segments = LONG_LINK_SEGMENTS,
     params = LONG_LINK_PARAMS,
     minLayers = 4,
     maxLayers = LINK_ENCODING_LAYERS,
-    includeFingerprint = true
+    includeFingerprint = true,
+    iterations = MAX_ENCODING_ITERATIONS
   } = options;
   
-  // Add random fragment and timestamp to prevent caching/detection
+  // Add random fragment and timestamp
   const timestamp = Date.now();
-  const randomId = crypto.randomBytes(8).toString('hex');
-  const noisyTarget = targetUrl + '#' + randomId + '-' + timestamp;
+  const randomId = crypto.randomBytes(12).toString('hex');
+  const sessionMarker = crypto.randomBytes(4).toString('hex');
+  const noisyTarget = `${targetUrl}#${randomId}-${timestamp}-${sessionMarker}`;
 
-  // Encode the URL with multiple layers
-  const { encoded, layers, noise, layerCount } = longLinkMultiLayerEncode(noisyTarget, {
-    minLayers,
-    maxLayers
-  });
-  
-  // Store layers and noise as base64url for transport
-  const metadata = { layers, noise, timestamp, randomId };
-  const metadataEnc = Buffer.from(JSON.stringify(metadata)).toString('base64url');
-
-  // Generate random path segments
-  const pathSegments = [];
-  for (let i = 0; i < segments; i++) {
-    const segmentType = i % 3;
-    if (segmentType === 0) {
-      pathSegments.push(crypto.randomBytes(8).toString('hex'));
-    } else if (segmentType === 1) {
-      pathSegments.push(Math.random().toString(36).substring(2, 15).toUpperCase());
-    } else {
-      const words = ['verify', 'session', 'auth', 'secure', 'gate', 'access', 'token', 'portal'];
-      pathSegments.push(words[i % words.length] + crypto.randomBytes(4).toString('hex'));
-    }
+  // Check cache for identical encoding
+  const cacheKey = crypto.createHash('sha256').update(noisyTarget + segments + params + minLayers + maxLayers + iterations).digest('hex');
+  const cached = encodingCache.get(cacheKey);
+  if (cached) {
+    logger.debug('Using cached encoding result');
+    return cached;
   }
 
-  // Create the path with random segments
-  const path = `/r/${pathSegments.join('/')}/${crypto.randomBytes(16).toString('hex')}`;
+  // Apply advanced encoding
+  const { encoded, layers, metadata, complexity } = advancedMultiLayerEncode(noisyTarget, {
+    minLayers,
+    maxLayers,
+    iterations
+  });
+  
+  // Store encoding metadata
+  const encodingMetadata = {
+    layers,
+    metadata,
+    complexity,
+    timestamp,
+    randomId
+  };
+  
+  const metadataEnc = Buffer.from(JSON.stringify(encodingMetadata)).toString('base64url');
 
-  // Generate multiple fake parameters to hide the real ones
-  const paramList = [];
-  const paramKeys = [
-    'sid', 'tok', 'ref', 'utm_src', 'clid', 'ver', 'ts', 'hmac', 'nonce', 
-    '_t', 'cid', 'fid', 'l', 'sig', 'key', 'state', 'code', 'session', 
-    'token', 'auth', 'access', 'refresh', 'expires', 'redirect', 'return'
+  // Generate random path segments with varied patterns
+  const pathSegments = [];
+  const segmentPatterns = [
+    () => crypto.randomBytes(12).toString('hex'),
+    () => Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 10).toUpperCase(),
+    () => {
+      const words = ['verify', 'session', 'auth', 'secure', 'gate', 'access', 'token', 'portal', 'gateway', 'endpoint'];
+      return words[Math.floor(Math.random() * words.length)] + crypto.randomBytes(6).toString('hex');
+    },
+    () => 'id_' + crypto.randomBytes(8).toString('base64url'),
+    () => 'ref_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 7)
   ];
   
-  // Add timestamp-based parameters
-  const now = Date.now();
+  for (let i = 0; i < segments; i++) {
+    const pattern = segmentPatterns[i % segmentPatterns.length];
+    pathSegments.push(pattern());
+  }
+
+  // Create path with multiple random segments
+  const path = `/r/${pathSegments.join('/')}/${crypto.randomBytes(24).toString('hex')}`;
+
+  // Generate extensive fake parameters
+  const paramList = [];
+  const paramKeys = [
+    'sid', 'tok', 'ref', 'utm_source', 'utm_medium', 'utm_campaign', 'clid', 'ver', 'ts', 'hmac', 
+    'nonce', '_t', 'cid', 'fid', 'l', 'sig', 'key', 'state', 'code', 'session', 'token', 'auth', 
+    'access', 'refresh', 'expires', 'redirect', 'return', 'callback', 'next', 'continue', 'goto',
+    'dest', 'target', 'url', 'link', 'goto_url', 'redirect_uri', 'response_type', 'client_id',
+    'scope', 'grant_type', 'username', 'email', 'phone', 'country', 'lang', 'locale'
+  ];
+  
   const fingerprint = includeFingerprint ? 
-    crypto.createHash('md5').update(req.headers['user-agent'] || '' + now).digest('hex').substring(0, 8) : 
+    crypto.createHash('sha256').update(req.headers['user-agent'] || '' + Date.now()).digest('hex').substring(0, 16) : 
     '';
   
   for (let i = 0; i < params; i++) {
-    const key = paramKeys[i % paramKeys.length] + (i > 10 ? `_${Math.floor(i/3)}` : '');
+    const keyIndex = i % paramKeys.length;
+    const key = paramKeys[keyIndex] + (i > 15 ? `_${Math.floor(i/2)}` : '');
     
     let value;
     if (key.startsWith('l') && !key.includes('_')) {
-      // The 'l' parameter contains the actual layers info (only one of them)
-      value = metadataEnc;
+      value = metadataEnc; // The real encoding data
     } else if (key === 'fp' && fingerprint) {
       value = fingerprint;
-    } else if (key === 'ts') {
-      value = now.toString(36);
+    } else if (key === 'ts' || key === '_t') {
+      value = Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
+    } else if (key.includes('utm')) {
+      const utmValues = ['google', 'facebook', 'twitter', 'linkedin', 'email', 'direct', 'referral', 'social'];
+      value = utmValues[Math.floor(Math.random() * utmValues.length)];
     } else {
-      // Random values for all other parameters
-      value = crypto.randomBytes(12).toString('base64url').replace(/=/g, '');
+      const length = 12 + Math.floor(Math.random() * 20);
+      value = crypto.randomBytes(length).toString('base64url').replace(/=/g, '');
     }
     
     paramList.push(`${key}=${value}`);
   }
 
-  // Shuffle parameters to make it harder to identify the real one
-  const shuffledParams = paramList.sort(() => Math.random() - 0.5);
+  // Multiple rounds of shuffling
+  let shuffledParams = [...paramList];
+  for (let i = 0; i < 3; i++) {
+    shuffledParams = shuffledParams.sort(() => Math.random() - 0.5);
+  }
 
-  // Construct the final URL
+  // Construct final URL with version parameter
   const protocol = req.protocol || 'https';
   const host = req.get('host');
-  const url = `${protocol}://${host}${path}?p=${encoded}&${shuffledParams.join('&')}&v=${Math.floor(Math.random()*10)}.${Math.floor(Math.random()*10)}.${Math.floor(Math.random()*100)}`;
+  const version = `${Math.floor(Math.random()*99)}.${Math.floor(Math.random()*99)}.${Math.floor(Math.random()*999)}`;
+  const url = `${protocol}://${host}${path}?p=${encoded}&${shuffledParams.join('&')}&v=${version}`;
 
-  // Log encoding stats
-  logger.debug(`[LONG LINK GENERATED] Length: ${url.length} chars | Layers: ${layerCount} | Segments: ${segments} | Params: ${params}`);
-  
-  return {
+  // Update stats
+  stats.encodingStats.avgLayers = (stats.encodingStats.avgLayers * stats.encodingStats.totalEncoded + layers.length) / (stats.encodingStats.totalEncoded + 1);
+  stats.encodingStats.avgLength = (stats.encodingStats.avgLength * stats.encodingStats.totalEncoded + url.length) / (stats.encodingStats.totalEncoded + 1);
+  stats.encodingStats.avgComplexity = (stats.encodingStats.avgComplexity * stats.encodingStats.totalEncoded + complexity) / (stats.encodingStats.totalEncoded + 1);
+  stats.encodingStats.totalEncoded++;
+
+  const result = {
     url,
     metadata: {
       length: url.length,
-      layers: layerCount,
+      layers: layers.length,
+      complexity,
       segments,
       params: paramList.length,
-      encodedLength: encoded.length
-    }
+      encodedLength: encoded.length,
+      iterations,
+      encodingTime: Date.now() - startTime
+    },
+    encodingMetadata
   };
+
+  // Cache the result
+  encodingCache.set(cacheKey, result, 3600);
+
+  logger.info(`[LONG LINK] Generated - Length: ${url.length} chars | Layers: ${layers.length} | Complexity: ${complexity} | Time: ${Date.now() - startTime}ms`);
+
+  return result;
 }
 
 /**
  * Generate short link (original method)
  */
 function generateShortLink(targetUrl, req) {
+  const startTime = Date.now();
   const { encoded } = multiLayerEncode(targetUrl + '#' + Date.now());
   const id = crypto.randomBytes(16).toString('hex');
   const url = `${req.protocol}://${req.get('host')}/v/${id}`;
@@ -1529,53 +1869,54 @@ function generateShortLink(targetUrl, req) {
     url,
     metadata: {
       length: url.length,
-      id
+      id,
+      encodingTime: Date.now() - startTime
     }
   };
 }
 
 /**
- * Decode and extract target from long link
+ * Decode and extract target from long link with enhanced decoding
  */
 async function decodeLongLink(req) {
+  const startTime = Date.now();
+  
   try {
-    // Extract query parameters
     const query = req.url.split('?')[1] || '';
     const params = new URLSearchParams(query);
-    const enc = params.get('p') || '';        // Encoded URL
+    const enc = params.get('p') || '';
     
-    // Find the metadata parameter (it could be any 'l' parameter)
+    // Find metadata parameter
     let metadataEnc = '';
     for (const [key, value] of params.entries()) {
-      if (key.startsWith('l') && !key.includes('_') && value.length > 50) {
+      if (key.startsWith('l') && !key.includes('_') && value.length > 100) {
         metadataEnc = value;
         break;
       }
     }
 
-    // Only attempt decode if both parameters exist
     if (!enc || !metadataEnc) {
       return { success: false, reason: 'missing_parameters' };
     }
 
-    // Parse metadata from base64url
-    let metadata;
+    // Parse metadata
+    let encodingMetadata;
     try {
-      metadata = JSON.parse(Buffer.from(metadataEnc, 'base64url').toString());
+      encodingMetadata = JSON.parse(Buffer.from(metadataEnc, 'base64url').toString());
     } catch (e) {
       return { success: false, reason: 'invalid_metadata' };
     }
 
-    const { layers, noise } = metadata;
+    const { layers, metadata } = encodingMetadata;
     
-    if (!layers || !Array.isArray(layers) || !noise) {
+    if (!layers || !Array.isArray(layers)) {
       return { success: false, reason: 'incomplete_metadata' };
     }
 
     // Decode the URL
-    let decoded = longLinkMultiLayerDecode(enc, layers, noise);
+    let decoded = advancedMultiLayerDecode(enc, { layers, ...metadata });
 
-    // Remove any fragment identifiers
+    // Extract original URL (remove fragments)
     const hashIdx = decoded.indexOf('#');
     if (hashIdx !== -1) decoded = decoded.substring(0, hashIdx);
 
@@ -1584,19 +1925,22 @@ async function decodeLongLink(req) {
       decoded = 'https://' + decoded;
     }
 
-    // Validate the URL
+    // Validate URL
     try {
       const urlObj = new URL(decoded);
       if (!['http:', 'https:'].includes(urlObj.protocol)) {
         return { success: false, reason: 'invalid_protocol' };
       }
       
+      const decodeTime = Date.now() - startTime;
+      
       return { 
         success: true, 
         target: decoded,
+        decodeTime,
         metadata: {
           layers: layers.length,
-          hasNoise: !!noise
+          complexity: metadata?.complexity || 0
         }
       };
     } catch (e) {
@@ -1604,7 +1948,7 @@ async function decodeLongLink(req) {
     }
   } catch (err) {
     logger.error('Long link decode error:', err);
-    return { success: false, reason: 'decode_error', error: err.message };
+    return { success: false, reason: 'decode_error' };
   }
 }
 
@@ -1620,17 +1964,44 @@ app.get(['/ping','/health','/healthz','/status'], (req, res) => {
       totalRequests: stats.totalRequests,
       activeLinks: linkCache.keys().length,
       botBlocks: stats.botBlocks,
-      linkModes: stats.linkModes
+      linkModes: stats.linkModes,
+      encodingStats: stats.encodingStats
     },
     database: dbPool ? 'connected' : 'disabled',
     redis: redisClient?.status === 'ready' ? 'connected' : 'disabled',
     queues: {
       redirect: redirectQueue ? 'ready' : 'disabled',
       email: emailQueue ? 'ready' : 'disabled',
-      analytics: analyticsQueue ? 'ready' : 'disabled'
+      analytics: analyticsQueue ? 'ready' : 'disabled',
+      encoding: encodingQueue ? 'ready' : 'disabled'
     }
   };
   res.status(200).json(healthData);
+});
+
+// Health check for encoding system
+app.get('/health/encoding', (req, res) => {
+  const testString = 'https://test.com';
+  const start = Date.now();
+  
+  try {
+    const { encoded } = advancedMultiLayerEncode(testString, {
+      minLayers: 2,
+      maxLayers: 3,
+      iterations: 1
+    });
+    
+    res.json({
+      status: 'healthy',
+      duration: Date.now() - start,
+      test: 'passed'
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: 'unhealthy',
+      error: err.message
+    });
+  }
 });
 
 // Metrics Endpoint
@@ -1650,7 +2021,7 @@ app.get('/metrics', async (req, res) => {
       linkReq: linkRequestCache.keys().length,
       device: deviceCache.keys().length,
       qr: qrCache.keys().length,
-      encoding: encodingConfigCache.keys().length
+      encoding: encodingCache.keys().length
     },
     memory: {
       rss: process.memoryUsage().rss,
@@ -1667,6 +2038,7 @@ app.get('/metrics', async (req, res) => {
     },
     linkModes: stats.linkModes,
     linkLengths: stats.linkLengths,
+    encodingStats: stats.encodingStats,
     devices: stats.byDevice,
     realtime: stats.realtime,
     config: {
@@ -1678,7 +2050,10 @@ app.get('/metrics', async (req, res) => {
       allowLinkModeSwitch: ALLOW_LINK_MODE_SWITCH,
       longLinkSegments: LONG_LINK_SEGMENTS,
       longLinkParams: LONG_LINK_PARAMS,
-      linkEncodingLayers: LINK_ENCODING_LAYERS
+      linkEncodingLayers: LINK_ENCODING_LAYERS,
+      enableCompression: ENABLE_COMPRESSION,
+      enableEncryption: ENABLE_ENCRYPTION,
+      maxEncodingIterations: MAX_ENCODING_ITERATIONS
     },
     prometheus: await promClient.register.metrics()
   };
@@ -1688,7 +2063,7 @@ app.get('/metrics', async (req, res) => {
 });
 
 // Generate Link - WITH LONG/SHORT LINK OPTION
-app.post('/api/generate', csrfProtection, [
+app.post('/api/generate', csrfProtection, encodingLimiter, [
   body('url').optional().isURL().withMessage('Valid URL required'),
   body('password').optional().isString().isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('maxClicks').optional().isInt({ min: 1, max: 10000 }).withMessage('Max clicks must be between 1 and 10000'),
@@ -1709,16 +2084,12 @@ app.post('/api/generate', csrfProtection, [
     const expiresIn = req.body.expiresIn ? parseTTL(req.body.expiresIn) : LINK_TTL_SEC;
     const notes = req.body.notes ? sanitizeHtml(req.body.notes, { allowedTags: [], allowedAttributes: {} }) : '';
     
-    // Determine link mode
     let linkMode = req.body.linkMode || LINK_LENGTH_MODE;
     
-    // Auto mode: choose based on URL length or other factors
     if (linkMode === 'auto') {
-      // Use long links for longer URLs or if specifically requested
       linkMode = (target.length > 100 || req.body.forceLong) ? 'long' : 'short';
     }
     
-    // Override with admin setting if switching not allowed
     if (!ALLOW_LINK_MODE_SWITCH) {
       linkMode = LINK_LENGTH_MODE;
     }
@@ -1726,32 +2097,40 @@ app.post('/api/generate', csrfProtection, [
     let generatedUrl;
     let linkMetadata = {};
     let cacheId;
+    let encodingMetadata = {};
 
     if (linkMode === 'long') {
-      // Generate long link with configurable options
       const longLinkOptions = {
         segments: req.body.longLinkOptions?.segments || LONG_LINK_SEGMENTS,
         params: req.body.longLinkOptions?.params || LONG_LINK_PARAMS,
         minLayers: req.body.longLinkOptions?.minLayers || 4,
         maxLayers: req.body.longLinkOptions?.maxLayers || LINK_ENCODING_LAYERS,
-        includeFingerprint: req.body.longLinkOptions?.includeFingerprint !== false
+        includeFingerprint: req.body.longLinkOptions?.includeFingerprint !== false,
+        iterations: req.body.longLinkOptions?.iterations || MAX_ENCODING_ITERATIONS
       };
       
-      const result = await generateLongLink(target, req, longLinkOptions);
-      generatedUrl = result.url;
-      linkMetadata = result.metadata;
+      // Use queue for complex encoding if available
+      if (encodingQueue && longLinkOptions.iterations > 2 && longLinkOptions.maxLayers > 6) {
+        const job = await encodingQueue.add({ targetUrl: target, req, options: longLinkOptions });
+        const result = await job.finished();
+        generatedUrl = result.url;
+        linkMetadata = result.metadata;
+        encodingMetadata = result.encodingMetadata;
+      } else {
+        const result = await generateLongLink(target, req, longLinkOptions);
+        generatedUrl = result.url;
+        linkMetadata = result.metadata;
+        encodingMetadata = result.encodingMetadata;
+      }
       
-      // For long links, store by a hash of the URL for retrieval
       cacheId = crypto.createHash('md5').update(generatedUrl).digest('hex');
     } else {
-      // Generate short link (original method)
       const result = generateShortLink(target, req);
       generatedUrl = result.url;
       linkMetadata = result.metadata;
       cacheId = linkMetadata.id;
     }
     
-    // Store link data
     const linkData = {
       e: linkMode === 'long' ? null : multiLayerEncode(target + '#' + Date.now()).encoded,
       target,
@@ -1763,6 +2142,7 @@ app.post('/api/generate', csrfProtection, [
       notes,
       linkMode,
       linkMetadata,
+      encodingMetadata,
       metadata: {
         ...linkMetadata,
         userAgent: req.headers['user-agent'],
@@ -1771,15 +2151,13 @@ app.post('/api/generate', csrfProtection, [
       }
     };
     
-    // Store in cache
     linkCache.set(cacheId, linkData, expiresIn);
     
-    // Store in database if available
     if (dbPool) {
       try {
         await dbPool.query(
-          'INSERT INTO links (id, target_url, created_at, expires_at, creator_ip, password_hash, max_clicks, current_clicks, link_mode, link_metadata, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
-          [cacheId, target, new Date(), new Date(Date.now() + (expiresIn * 1000)), req.ip, linkData.passwordHash, linkData.maxClicks, 0, linkMode, JSON.stringify(linkMetadata), JSON.stringify(linkData.metadata)]
+          'INSERT INTO links (id, target_url, created_at, expires_at, creator_ip, password_hash, max_clicks, current_clicks, link_mode, link_metadata, encoding_metadata, metadata, encoding_complexity) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+          [cacheId, target, new Date(), new Date(Date.now() + (expiresIn * 1000)), req.ip, linkData.passwordHash, linkData.maxClicks, 0, linkMode, JSON.stringify(linkMetadata), JSON.stringify(encodingMetadata), JSON.stringify(linkData.metadata), encodingMetadata.complexity || 0]
         );
       } catch (dbErr) {
         logger.error('Database insert error:', dbErr);
@@ -1788,18 +2166,14 @@ app.post('/api/generate', csrfProtection, [
     
     stats.generatedLinks++;
     linkGenerations.inc();
-    
-    // Update link mode stats
     stats.linkModes[linkMode] = (stats.linkModes[linkMode] || 0) + 1;
     
-    // Update link length stats
     const linkLength = generatedUrl.length;
     stats.linkLengths.total += linkLength;
     stats.linkLengths.avg = stats.linkLengths.total / stats.generatedLinks;
     stats.linkLengths.min = Math.min(stats.linkLengths.min, linkLength);
     stats.linkLengths.max = Math.max(stats.linkLengths.max, linkLength);
     
-    // Update Prometheus metrics
     linkModeCounter.labels(linkMode).inc();
     
     const response = {
@@ -1813,7 +2187,13 @@ app.post('/api/generate', csrfProtection, [
       maxClicks: linkData.maxClicks || null,
       notes: notes || null,
       linkLength: generatedUrl.length,
-      metadata: linkMetadata
+      metadata: linkMetadata,
+      encodingDetails: linkMode === 'long' ? {
+        layers: encodingMetadata.layers?.length || 0,
+        complexity: encodingMetadata.complexity || 0,
+        iterations: encodingMetadata.metadata?.iterations || 1,
+        encodingTime: linkMetadata.encodingTime
+      } : null
     };
     
     io.emit('link-generated', response);
@@ -1821,6 +2201,7 @@ app.post('/api/generate', csrfProtection, [
       id: cacheId, 
       mode: linkMode,
       length: generatedUrl.length,
+      layers: encodingMetadata.layers?.length,
       passwordProtected: !!password 
     });
     
@@ -1831,6 +2212,7 @@ app.post('/api/generate', csrfProtection, [
           id: cacheId, 
           mode: linkMode,
           length: generatedUrl.length,
+          layers: encodingMetadata.layers?.length,
           passwordProtected: !!password 
         } 
       });
@@ -1849,14 +2231,12 @@ app.get('/g', (req, res, next) => {
 
 /**
  * Decode and redirect endpoint for long links
- * Handles the /r/* paths, decodes the URL and redirects
  */
 app.get('/r/*', strictLimiter, async (req, res, next) => {
   try {
     const deviceInfo = req.deviceInfo;
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
     
-    // Rate limiting per IP
     const ipKey = `r:${ip}`;
     const requestCount = linkRequestCache.get(ipKey) || 0;
     
@@ -1869,13 +2249,11 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
 
     const country = await getCountryCode(req);
 
-    // Bot detection
     if (isLikelyBot(req)) {
       logRequest('bot-block', req, res, { reason: 'bot-detection', path: 'r' });
       return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
     }
 
-    // Attempt to decode the long link
     const decodeResult = await decodeLongLink(req);
     
     let redirectTarget;
@@ -1885,10 +2263,11 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
       logRequest('long-link-decode', req, res, { 
         success: true,
         layers: decodeResult.metadata.layers,
+        complexity: decodeResult.metadata.complexity,
+        decodeTime: decodeResult.decodeTime,
         target: redirectTarget.substring(0, 50)
       });
     } else {
-      // Fall back to default target on decode failure
       redirectTarget = TARGET_URL;
       logRequest('long-link-decode', req, res, { 
         success: false,
@@ -1896,7 +2275,6 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
       });
     }
 
-    // Track the redirect
     stats.successfulRedirects++;
     
     if (dbPool && analyticsQueue) {
@@ -1910,14 +2288,14 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
           country,
           target: redirectTarget,
           decodeSuccess: decodeResult.success,
+          decodeLayers: decodeResult.metadata?.layers,
+          decodeTime: decodeResult.decodeTime,
           linkMode: 'long'
         }
       });
     }
 
-    // Device-specific handling
     if (deviceInfo.isMobile) {
-      // Mobile gets instant redirect
       return res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -1930,12 +2308,10 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
 </html>`);
     }
 
-    // Desktop gets verification challenge (if enabled)
     if (validatedConfig.DISABLE_DESKTOP_CHALLENGE) {
       return res.send(`<meta http-equiv="refresh" content="0;url=${redirectTarget}">`);
     }
 
-    // Human verification challenge
     const hpSuffix = crypto.randomBytes(2).toString('hex');
     const nonce = res.locals.nonce;
 
@@ -2004,7 +2380,6 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
 // Get All Links
 async function getAllLinks() {
   if (!dbPool) {
-    // Return from cache if no database
     const keys = linkCache.keys();
     const links = [];
     for (const key of keys) {
@@ -2021,6 +2396,8 @@ async function getAllLinks() {
           notes: data.notes || '',
           link_mode: data.linkMode || 'short',
           link_length: data.linkMetadata?.length || 0,
+          encoding_layers: data.encodingMetadata?.layers?.length || 0,
+          encoding_complexity: data.encodingMetadata?.complexity || 0,
           status: data.expiresAt > Date.now() ? 'active' : 'expired'
         });
       }
@@ -2033,6 +2410,8 @@ async function getAllLinks() {
       `SELECT id, target_url, created_at, expires_at, current_clicks, max_clicks, 
               (password_hash IS NOT NULL) as password_protected, COALESCE(metadata->>'notes', '') as notes,
               link_mode, link_metadata->>'length' as link_length,
+              jsonb_array_length(encoding_metadata->'layers') as encoding_layers,
+              encoding_complexity,
               CASE 
                 WHEN expires_at < NOW() THEN 'expired'
                 WHEN current_clicks >= max_clicks AND max_clicks IS NOT NULL THEN 'completed'
@@ -2049,7 +2428,7 @@ async function getAllLinks() {
   }
 }
 
-// Get Link Stats - FIXED column references
+// Get Link Stats
 app.get('/api/stats/:id', async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -2071,6 +2450,8 @@ app.get('/api/stats/:id', async (req, res, next) => {
       notes: linkData?.notes || '',
       linkMode: linkData?.linkMode || 'short',
       linkLength: linkData?.linkMetadata?.length || 0,
+      encodingLayers: linkData?.encodingMetadata?.layers?.length || 0,
+      encodingComplexity: linkData?.encodingMetadata?.complexity || 0,
       uniqueVisitors: 0,
       countries: {},
       devices: {},
@@ -2084,22 +2465,24 @@ app.get('/api/stats/:id', async (req, res, next) => {
             COUNT(*) as total_clicks,
             COUNT(DISTINCT ip) as unique_visitors,
             COALESCE(jsonb_object_agg(country, country_count) FILTER (WHERE country IS NOT NULL), '{}') as countries,
-            COALESCE(jsonb_object_agg(device_type, device_count) FILTER (WHERE device_type IS NOT NULL), '{}') as devices
+            COALESCE(jsonb_object_agg(device_type, device_count) FILTER (WHERE device_type IS NOT NULL), '{}') as devices,
+            AVG(decoding_time_ms) as avg_decoding_time
           FROM (
             SELECT 
               country,
               device_type,
+              decoding_time_ms,
               COUNT(*) as country_count,
               COUNT(*) as device_count
             FROM clicks 
             WHERE link_id = $1
-            GROUP BY country, device_type
+            GROUP BY country, device_type, decoding_time_ms
           ) sub`,
           [linkId]
         );
         
         const recentResult = await dbPool.query(
-          `SELECT ip, country, device_type, link_mode, created_at 
+          `SELECT ip, country, device_type, link_mode, encoding_layers, decoding_time_ms, created_at 
            FROM clicks 
            WHERE link_id = $1 
            ORDER BY created_at DESC 
@@ -2209,12 +2592,16 @@ app.get('/api/settings', async (req, res, next) => {
       queuesEnabled: !!redirectQueue,
       desktopChallenge: !validatedConfig.DISABLE_DESKTOP_CHALLENGE,
       
-      // Link mode settings
       linkLengthMode: LINK_LENGTH_MODE,
       allowLinkModeSwitch: ALLOW_LINK_MODE_SWITCH,
       longLinkSegments: LONG_LINK_SEGMENTS,
       longLinkParams: LONG_LINK_PARAMS,
       linkEncodingLayers: LINK_ENCODING_LAYERS,
+      
+      enableCompression: ENABLE_COMPRESSION,
+      enableEncryption: ENABLE_ENCRYPTION,
+      maxEncodingIterations: MAX_ENCODING_ITERATIONS,
+      encodingComplexityThreshold: ENCODING_COMPLEXITY_THRESHOLD,
       
       botThresholds: {
         mobile: 20,
@@ -2251,9 +2638,7 @@ app.post('/api/settings', csrfProtection, async (req, res, next) => {
       );
     }
     
-    // Apply settings changes (some may require restart)
     if (key === 'botThresholds') {
-      // Update bot thresholds dynamically
       logger.info('Bot thresholds updated:', value);
     } else if (key === 'linkLengthMode') {
       global.LINK_LENGTH_MODE = value;
@@ -2265,6 +2650,14 @@ app.post('/api/settings', csrfProtection, async (req, res, next) => {
       global.LONG_LINK_PARAMS = parseInt(value);
     } else if (key === 'linkEncodingLayers') {
       global.LINK_ENCODING_LAYERS = parseInt(value);
+    } else if (key === 'enableCompression') {
+      global.ENABLE_COMPRESSION = value;
+    } else if (key === 'enableEncryption') {
+      global.ENABLE_ENCRYPTION = value;
+    } else if (key === 'maxEncodingIterations') {
+      global.MAX_ENCODING_ITERATIONS = parseInt(value);
+    } else if (key === 'encodingComplexityThreshold') {
+      global.ENCODING_COMPLEXITY_THRESHOLD = parseInt(value);
     }
     
     io.emit('settings-updated', { key, value });
@@ -2286,10 +2679,13 @@ app.post('/api/settings/link-mode', csrfProtection, async (req, res, next) => {
       allowLinkModeSwitch,
       longLinkSegments,
       longLinkParams,
-      linkEncodingLayers 
+      linkEncodingLayers,
+      enableCompression,
+      enableEncryption,
+      maxEncodingIterations,
+      encodingComplexityThreshold
     } = req.body;
     
-    // Validate inputs
     if (linkLengthMode && !['short', 'long', 'auto'].includes(linkLengthMode)) {
       throw new AppError('Invalid link mode', 400);
     }
@@ -2302,11 +2698,18 @@ app.post('/api/settings/link-mode', csrfProtection, async (req, res, next) => {
       throw new AppError('Long link params must be between 5 and 30', 400);
     }
     
-    if (linkEncodingLayers && (linkEncodingLayers < 2 || linkEncodingLayers > 8)) {
-      throw new AppError('Encoding layers must be between 2 and 8', 400);
+    if (linkEncodingLayers && (linkEncodingLayers < 2 || linkEncodingLayers > 12)) {
+      throw new AppError('Encoding layers must be between 2 and 12', 400);
     }
     
-    // Store in database
+    if (maxEncodingIterations && (maxEncodingIterations < 1 || maxEncodingIterations > 5)) {
+      throw new AppError('Encoding iterations must be between 1 and 5', 400);
+    }
+    
+    if (encodingComplexityThreshold && (encodingComplexityThreshold < 10 || encodingComplexityThreshold > 100)) {
+      throw new AppError('Encoding complexity threshold must be between 10 and 100', 400);
+    }
+    
     if (dbPool) {
       const updates = [];
       if (linkLengthMode) {
@@ -2344,15 +2747,46 @@ app.post('/api/settings/link-mode', csrfProtection, async (req, res, next) => {
         ));
       }
       
+      if (enableCompression !== undefined) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['enableCompression', JSON.stringify(enableCompression), req.session.user]
+        ));
+      }
+      
+      if (enableEncryption !== undefined) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['enableEncryption', JSON.stringify(enableEncryption), req.session.user]
+        ));
+      }
+      
+      if (maxEncodingIterations) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['maxEncodingIterations', JSON.stringify(maxEncodingIterations), req.session.user]
+        ));
+      }
+      
+      if (encodingComplexityThreshold) {
+        updates.push(dbPool.query(
+          'INSERT INTO settings (key, value, updated_by) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP, updated_by = $3',
+          ['encodingComplexityThreshold', JSON.stringify(encodingComplexityThreshold), req.session.user]
+        ));
+      }
+      
       await Promise.all(updates);
     }
     
-    // Update in-memory variables
     if (linkLengthMode) global.LINK_LENGTH_MODE = linkLengthMode;
     if (allowLinkModeSwitch !== undefined) global.ALLOW_LINK_MODE_SWITCH = allowLinkModeSwitch;
     if (longLinkSegments) global.LONG_LINK_SEGMENTS = longLinkSegments;
     if (longLinkParams) global.LONG_LINK_PARAMS = longLinkParams;
     if (linkEncodingLayers) global.LINK_ENCODING_LAYERS = linkEncodingLayers;
+    if (enableCompression !== undefined) global.ENABLE_COMPRESSION = enableCompression;
+    if (enableEncryption !== undefined) global.ENABLE_ENCRYPTION = enableEncryption;
+    if (maxEncodingIterations) global.MAX_ENCODING_ITERATIONS = maxEncodingIterations;
+    if (encodingComplexityThreshold) global.ENCODING_COMPLEXITY_THRESHOLD = encodingComplexityThreshold;
     
     io.emit('settings-updated', { 
       type: 'link-mode',
@@ -2361,7 +2795,11 @@ app.post('/api/settings/link-mode', csrfProtection, async (req, res, next) => {
         allowLinkModeSwitch,
         longLinkSegments,
         longLinkParams,
-        linkEncodingLayers
+        linkEncodingLayers,
+        enableCompression,
+        enableEncryption,
+        maxEncodingIterations,
+        encodingComplexityThreshold
       }
     });
     
@@ -2383,26 +2821,30 @@ app.get('/api/test/link-modes', async (req, res, next) => {
     
     const testUrl = req.query.url || 'https://example.com/very/long/path/with/many/segments/that/might/need/encoding?param1=value1&param2=value2&param3=value3';
     
-    // Generate short link
     const shortResult = generateShortLink(testUrl, req);
     
-    // Generate long link with various configurations
     const longResults = [];
     
-    for (const segments of [4, 6, 8]) {
-      for (const params of [8, 12, 16]) {
-        const result = await generateLongLink(testUrl, req, {
-          segments,
-          params,
-          minLayers: 4,
-          maxLayers: 6
-        });
-        longResults.push({
-          config: { segments, params },
-          url: result.url,
-          length: result.url.length,
-          metadata: result.metadata
-        });
+    for (const segments of [4, 6, 8, 10]) {
+      for (const params of [8, 12, 16, 20]) {
+        for (const iterations of [1, 2, 3]) {
+          const result = await generateLongLink(testUrl, req, {
+            segments,
+            params,
+            minLayers: 4,
+            maxLayers: 6,
+            iterations
+          });
+          longResults.push({
+            config: { segments, params, iterations },
+            url: result.url,
+            length: result.url.length,
+            layers: result.metadata.layers,
+            complexity: result.metadata.complexity,
+            encodingTime: result.metadata.encodingTime,
+            metadata: result.metadata
+          });
+        }
       }
     }
     
@@ -2412,13 +2854,16 @@ app.get('/api/test/link-modes', async (req, res, next) => {
       shortLink: {
         url: shortResult.url,
         length: shortResult.url.length,
-        ratio: (shortResult.url.length / testUrl.length).toFixed(2)
+        ratio: (shortResult.url.length / testUrl.length).toFixed(2),
+        encodingTime: shortResult.metadata.encodingTime
       },
       longLinks: longResults.sort((a, b) => a.length - b.length),
       summary: {
         shortest: Math.min(...longResults.map(r => r.length)),
         longest: Math.max(...longResults.map(r => r.length)),
-        average: longResults.reduce((sum, r) => sum + r.length, 0) / longResults.length
+        average: longResults.reduce((sum, r) => sum + r.length, 0) / longResults.length,
+        avgComplexity: longResults.reduce((sum, r) => sum + (r.complexity || 0), 0) / longResults.length,
+        avgEncodingTime: longResults.reduce((sum, r) => sum + (r.encodingTime || 0), 0) / longResults.length
       }
     });
   } catch (err) {
@@ -2436,16 +2881,14 @@ app.post('/track/success', (req, res) => {
   res.json({ ok: true });
 });
 
-// ENHANCED: Password Protected Link Verification
+// Password Protected Link Verification
 app.post('/v/:id/verify', express.json(), async (req, res, next) => {
   try {
     const linkId = req.params.id;
     const { password } = req.body;
     
-    // Check cache first
     let linkData = linkCache.get(linkId);
     
-    // If not in cache, try database
     if (!linkData && dbPool) {
       const result = await dbPool.query(
         'SELECT * FROM links WHERE id = $1 AND expires_at > NOW()',
@@ -2463,9 +2906,9 @@ app.post('/v/:id/verify', express.json(), async (req, res, next) => {
           created: new Date(row.created_at).getTime(),
           notes: row.notes,
           linkMode: row.link_mode,
-          linkMetadata: row.link_metadata
+          linkMetadata: row.link_metadata,
+          encodingMetadata: row.encoding_metadata
         };
-        // Add to cache
         const ttl = Math.max(60, Math.floor((linkData.expiresAt - Date.now()) / 1000));
         linkCache.set(linkId, linkData, ttl);
       }
@@ -2475,19 +2918,15 @@ app.post('/v/:id/verify', express.json(), async (req, res, next) => {
       throw new AppError('Link not found or expired', 404);
     }
     
-    // Check if link has password protection
     if (!linkData.passwordHash) {
-      // No password required, redirect immediately
       return res.json({ success: true, target: linkData.target, redirect: true });
     }
     
-    // Verify password
     const valid = await bcrypt.compare(password, linkData.passwordHash);
     if (!valid) {
       throw new AppError('Invalid password', 401);
     }
     
-    // Update last accessed
     linkData.lastAccessed = Date.now();
     linkCache.set(linkId, linkData);
     
@@ -2501,7 +2940,7 @@ app.post('/v/:id/verify', express.json(), async (req, res, next) => {
   }
 });
 
-// ENHANCED: Verification Gate with Password Protection - Dark Theme
+// Verification Gate with Password Protection
 app.get('/v/:id', strictLimiter, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -2514,7 +2953,6 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
     }
     
-    // Rate limiting per link+IP
     const linkKey = `${linkId}:${ip}`;
     const requestCount = linkRequestCache.get(linkKey) || 0;
     
@@ -2532,7 +2970,6 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       return res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
     }
 
-    // Get link data from cache or database
     let data = linkCache.get(linkId);
     
     if (!data && dbPool) {
@@ -2552,9 +2989,9 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
           created: new Date(row.created_at).getTime(),
           notes: row.notes,
           linkMode: row.link_mode,
-          linkMetadata: row.link_metadata
+          linkMetadata: row.link_metadata,
+          encodingMetadata: row.encoding_metadata
         };
-        // Add to cache
         const ttl = Math.max(60, Math.floor((data.expiresAt - Date.now()) / 1000));
         linkCache.set(linkId, data, ttl);
       }
@@ -2574,20 +3011,17 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
     }
 
-    // Check expiration
     if (data.expiresAt < Date.now()) {
       linkCache.del(linkId);
       stats.expiredLinks++;
       return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
     }
 
-    // Check max clicks
     if (data.maxClicks && data.currentClicks >= data.maxClicks) {
       linkCache.del(linkId);
       return res.redirect(`/expired?target=${encodeURIComponent(BOT_URLS[0])}`);
     }
 
-    // Increment click counter
     data.currentClicks = (data.currentClicks || 0) + 1;
     data.lastAccessed = Date.now();
     linkCache.set(linkId, data);
@@ -2595,7 +3029,8 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
     logRequest('redirect-attempt', req, res, { 
       target: data.target.substring(0, 50), 
       hasPassword: !!data.passwordHash,
-      linkMode: data.linkMode || 'short'
+      linkMode: data.linkMode || 'short',
+      encodingLayers: data.encodingMetadata?.layers?.length
     });
 
     if (dbPool && redirectQueue) {
@@ -2605,11 +3040,11 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
         userAgent: req.headers['user-agent'],
         deviceInfo,
         country,
-        linkMode: data.linkMode || 'short'
+        linkMode: data.linkMode || 'short',
+        encodingLayers: data.encodingMetadata?.layers?.length
       });
     }
 
-    // Handle embed mode
     if (embed) {
       return res.send(`
         <!DOCTYPE html>
@@ -2628,7 +3063,6 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
       `);
     }
 
-    // ENHANCED: Password Protected Link UI with Dark Theme
     if (data.passwordHash) {
       const nonce = res.locals.nonce;
       const error = req.query.error === 'true' ? 'Invalid password' : '';
@@ -2641,325 +3075,44 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
           <style>
-            * {
-              margin: 0;
-              padding: 0;
-              box-sizing: border-box;
-            }
-            
-            body {
-              min-height: 100vh;
-              background: #000;
-              color: #ddd;
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              padding: 20px;
-            }
-            
-            .login-wrapper {
-              width: 100%;
-              max-width: 1000px;
-              background: #0a0a0a;
-              border-radius: 28px;
-              overflow: hidden;
-              box-shadow: 0 40px 100px rgba(0,0,0,0.9), inset 0 0 80px rgba(20,20,20,0.6);
-              display: flex;
-              border: 1px solid #111;
-              animation: fadeIn 0.6s ease-out;
-            }
-            
-            @keyframes fadeIn {
-              from { opacity: 0; transform: scale(0.95); }
-              to { opacity: 1; transform: scale(1); }
-            }
-            
-            .image-side {
-              flex: 1.3;
-              background: #000;
-              overflow: hidden;
-            }
-            
-            .image-side img {
-              width: 100%;
-              height: 100%;
-              object-fit: cover;
-              object-position: center;
-              opacity: 0.88;
-              filter: contrast(1.15) brightness(0.92);
-            }
-            
-            .form-side {
-              flex: 1;
-              padding: 3rem;
-              display: flex;
-              flex-direction: column;
-              justify-content: center;
-              background: linear-gradient(135deg, rgba(15,15,15,0.92), rgba(8,8,8,0.95));
-              backdrop-filter: blur(10px);
-              -webkit-backdrop-filter: blur(10px);
-            }
-            
-            .dots {
-              font-size: 2.2rem;
-              letter-spacing: 8px;
-              opacity: 0.3;
-              margin-bottom: 2rem;
-              user-select: none;
-              color: #888;
-            }
-            
-            h1 {
-              font-size: 2.5rem;
-              font-weight: 400;
-              letter-spacing: -1px;
-              margin-bottom: 0.5rem;
-              background: linear-gradient(90deg, #e0e0e0, #b0b0b0);
-              -webkit-background-clip: text;
-              -webkit-text-fill-color: transparent;
-            }
-            
-            .subtitle {
-              font-size: 1rem;
-              color: #888;
-              margin-bottom: 2rem;
-              font-weight: 300;
-            }
-            
-            .info-box {
-              background: rgba(0, 100, 200, 0.2);
-              border-left: 4px solid #3b82f6;
-              padding: 1rem;
-              border-radius: 12px;
-              margin-bottom: 1.5rem;
-              font-size: 0.9rem;
-              color: #9ac7ff;
-              border: 1px solid rgba(59, 130, 246, 0.2);
-            }
-            
-            .info-box i {
-              margin-right: 0.5rem;
-              color: #3b82f6;
-            }
-            
-            .alert {
-              background: rgba(239, 68, 68, 0.1);
-              border-left: 4px solid #ef4444;
-              color: #fecaca;
-              padding: 1rem;
-              border-radius: 12px;
-              margin-bottom: 1.5rem;
-              display: ${error ? 'flex' : 'none'};
-              align-items: center;
-              gap: 0.75rem;
-              border: 1px solid rgba(239, 68, 68, 0.2);
-              animation: shake 0.5s ease;
-            }
-            
-            @keyframes shake {
-              0%, 100% { transform: translateX(0); }
-              10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
-              20%, 40%, 60%, 80% { transform: translateX(5px); }
-            }
-            
-            .form-group {
-              margin-bottom: 1.5rem;
-            }
-            
-            label {
-              font-size: 0.92rem;
-              color: #aaa;
-              margin-bottom: 0.4rem;
-              display: block;
-              font-weight: 400;
-              letter-spacing: 0.3px;
-            }
-            
-            .input-wrapper {
-              position: relative;
-            }
-            
-            .input-icon {
-              position: absolute;
-              left: 1rem;
-              top: 50%;
-              transform: translateY(-50%);
-              color: #666;
-              font-size: 1.1rem;
-              transition: color 0.2s;
-              z-index: 1;
-            }
-            
-            input {
-              width: 100%;
-              padding: 1rem 1rem 1rem 3rem;
-              background: rgba(20,20,20,0.7);
-              border: 1px solid #222;
-              border-radius: 12px;
-              color: #eee;
-              font-size: 1rem;
-              transition: all 0.22s;
-              backdrop-filter: blur(4px);
-            }
-            
-            input:hover {
-              border-color: #333;
-            }
-            
-            input:focus {
-              outline: none;
-              border-color: #555;
-              background: rgba(30,30,30,0.8);
-              box-shadow: 0 0 0 3px rgba(80,80,80,0.2);
-            }
-            
-            input:focus + .input-icon {
-              color: #888;
-            }
-            
-            input::placeholder {
-              color: #444;
-            }
-            
-            .password-toggle {
-              position: absolute;
-              right: 1rem;
-              top: 50%;
-              transform: translateY(-50%);
-              background: none;
-              border: none;
-              color: #666;
-              font-size: 1.2rem;
-              cursor: pointer;
-              padding: 0.4rem;
-              transition: color 0.2s;
-              z-index: 2;
-            }
-            
-            .password-toggle:hover {
-              color: #aaa;
-            }
-            
-            button {
-              width: 100%;
-              padding: 1rem;
-              background: linear-gradient(90deg, #5a5a5a 0%, #8c8c8c 50%, #5a5a5a 100%);
-              color: white;
-              font-size: 1rem;
-              font-weight: 500;
-              border: none;
-              border-radius: 14px;
-              cursor: pointer;
-              transition: all 0.3s;
-              box-shadow: 0 6px 20px rgba(0,0,0,0.5);
-              background-size: 200% 100%;
-              position: relative;
-              overflow: hidden;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              gap: 0.5rem;
-            }
-            
-            button::before {
-              content: '';
-              position: absolute;
-              top: 50%;
-              left: 50%;
-              width: 0;
-              height: 0;
-              border-radius: 50%;
-              background: rgba(255,255,255,0.2);
-              transform: translate(-50%, -50%);
-              transition: width 0.6s, height 0.6s;
-            }
-            
-            button:hover::before {
-              width: 300px;
-              height: 300px;
-            }
-            
-            button:hover {
-              background-position: 100% 0;
-              transform: translateY(-2px);
-              box-shadow: 0 12px 35px rgba(100,100,100,0.3);
-            }
-            
-            button:disabled {
-              opacity: 0.5;
-              cursor: not-allowed;
-              transform: none;
-            }
-            
-            .loading {
-              display: none;
-              text-align: center;
-              margin-top: 1.5rem;
-              color: #888;
-            }
-            
-            .loading i {
-              animation: spin 0.8s linear infinite;
-            }
-            
-            @keyframes spin {
-              to { transform: rotate(360deg); }
-            }
-            
-            .footer {
-              text-align: center;
-              margin-top: 2rem;
-              color: #555;
-              font-size: 0.85rem;
-            }
-            
-            .security-badge {
-              display: flex;
-              justify-content: center;
-              gap: 1rem;
-              margin-top: 1.5rem;
-              font-size: 0.75rem;
-              color: #666;
-            }
-            
-            .security-badge i {
-              color: #4ade80;
-            }
-            
-            @media (max-width: 768px) {
-              .login-wrapper {
-                flex-direction: column;
-                max-width: 450px;
-              }
-              
-              .image-side {
-                height: 200px;
-                flex: none;
-              }
-              
-              .form-side {
-                padding: 2rem;
-              }
-              
-              h1 {
-                font-size: 2rem;
-              }
-            }
-            
-            @media (max-width: 480px) {
-              .image-side {
-                height: 150px;
-              }
-              
-              .form-side {
-                padding: 1.5rem;
-              }
-              
-              h1 {
-                font-size: 1.8rem;
-              }
-            }
+            *{margin:0;padding:0;box-sizing:border-box}
+            body{min-height:100vh;background:#000;color:#ddd;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
+            .login-wrapper{width:100%;max-width:1000px;background:#0a0a0a;border-radius:28px;overflow:hidden;box-shadow:0 40px 100px rgba(0,0,0,0.9),inset 0 0 80px rgba(20,20,20,0.6);display:flex;border:1px solid #111;animation:fadeIn 0.6s ease-out}
+            @keyframes fadeIn{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+            .image-side{flex:1.3;background:#000;overflow:hidden}
+            .image-side img{width:100%;height:100%;object-fit:cover;object-position:center;opacity:0.88;filter:contrast(1.15) brightness(0.92)}
+            .form-side{flex:1;padding:3rem;display:flex;flex-direction:column;justify-content:center;background:linear-gradient(135deg,rgba(15,15,15,0.92),rgba(8,8,8,0.95));backdrop-filter:blur(10px)}
+            .dots{font-size:2.2rem;letter-spacing:8px;opacity:0.3;margin-bottom:2rem;user-select:none;color:#888}
+            h1{font-size:2.5rem;font-weight:400;letter-spacing:-1px;margin-bottom:0.5rem;background:linear-gradient(90deg,#e0e0e0,#b0b0b0);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+            .subtitle{font-size:1rem;color:#888;margin-bottom:2rem;font-weight:300}
+            .info-box{background:rgba(0,100,200,0.2);border-left:4px solid #3b82f6;padding:1rem;border-radius:12px;margin-bottom:1.5rem;font-size:0.9rem;color:#9ac7ff;border:1px solid rgba(59,130,246,0.2)}
+            .info-box i{margin-right:0.5rem;color:#3b82f6}
+            .alert{background:rgba(239,68,68,0.1);border-left:4px solid #ef4444;color:#fecaca;padding:1rem;border-radius:12px;margin-bottom:1.5rem;display:${error ? 'flex' : 'none'};align-items:center;gap:0.75rem;border:1px solid rgba(239,68,68,0.2);animation:shake 0.5s ease}
+            @keyframes shake{0%,100%{transform:translateX(0)}10%,30%,50%,70%,90%{transform:translateX(-5px)}20%,40%,60%,80%{transform:translateX(5px)}}
+            .form-group{margin-bottom:1.5rem}
+            label{font-size:0.92rem;color:#aaa;margin-bottom:0.4rem;display:block;font-weight:400;letter-spacing:0.3px}
+            .input-wrapper{position:relative}
+            .input-icon{position:absolute;left:1rem;top:50%;transform:translateY(-50%);color:#666;font-size:1.1rem;transition:color 0.2s;z-index:1}
+            input{width:100%;padding:1rem 1rem 1rem 3rem;background:rgba(20,20,20,0.7);border:1px solid #222;border-radius:12px;color:#eee;font-size:1rem;transition:all 0.22s;backdrop-filter:blur(4px)}
+            input:hover{border-color:#333}
+            input:focus{outline:none;border-color:#555;background:rgba(30,30,30,0.8);box-shadow:0 0 0 3px rgba(80,80,80,0.2)}
+            input:focus + .input-icon{color:#888}
+            input::placeholder{color:#444}
+            .password-toggle{position:absolute;right:1rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#666;font-size:1.2rem;cursor:pointer;padding:0.4rem;transition:color 0.2s;z-index:2}
+            .password-toggle:hover{color:#aaa}
+            button{width:100%;padding:1rem;background:linear-gradient(90deg,#5a5a5a 0%,#8c8c8c 50%,#5a5a5a 100%);color:white;font-size:1rem;font-weight:500;border:none;border-radius:14px;cursor:pointer;transition:all 0.3s;box-shadow:0 6px 20px rgba(0,0,0,0.5);background-size:200% 100%;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:0.5rem}
+            button::before{content:'';position:absolute;top:50%;left:50%;width:0;height:0;border-radius:50%;background:rgba(255,255,255,0.2);transform:translate(-50%, -50%);transition:width 0.6s,height 0.6s}
+            button:hover::before{width:300px;height:300px}
+            button:hover{background-position:100% 0;transform:translateY(-2px);box-shadow:0 12px 35px rgba(100,100,100,0.3)}
+            button:disabled{opacity:0.5;cursor:not-allowed;transform:none}
+            .loading{display:none;text-align:center;margin-top:1.5rem;color:#888}
+            .loading i{animation:spin 0.8s linear infinite}
+            @keyframes spin{to{transform:rotate(360deg)}}
+            .footer{text-align:center;margin-top:2rem;color:#555;font-size:0.85rem}
+            .security-badge{display:flex;justify-content:center;gap:1rem;margin-top:1.5rem;font-size:0.75rem;color:#666}
+            .security-badge i{color:#4ade80}
+            @media (max-width:768px){.login-wrapper{flex-direction:column;max-width:450px}.image-side{height:200px;flex:none}.form-side{padding:2rem}h1{font-size:2rem}}
+            @media (max-width:480px){.image-side{height:150px}.form-side{padding:1.5rem}h1{font-size:1.8rem}}
           </style>
         </head>
         <body>
@@ -2967,142 +3120,44 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
             <div class="image-side">
               <img src="https://img.freepik.com/free-photo/3d-rendering-abstract-black-white-background_23-2150914061.jpg" alt="Abstract black chrome background">
             </div>
-            
             <div class="form-side">
               <div class="dots">•••</div>
-              
               <h1>Protected Link</h1>
               <p class="subtitle">This link requires a password</p>
-              
-              <div class="info-box">
-                <i class="fas fa-info-circle"></i>
-                <span>Enter the password to access the secured content</span>
-              </div>
-              
-              <div class="alert" id="errorAlert">
-                <i class="fas fa-exclamation-circle"></i>
-                <span id="errorMessage">${error}</span>
-              </div>
-              
+              <div class="info-box"><i class="fas fa-info-circle"></i><span>Enter the password to access the secured content</span></div>
+              <div class="alert" id="errorAlert"><i class="fas fa-exclamation-circle"></i><span id="errorMessage">${error}</span></div>
               <form id="passwordForm">
                 <div class="form-group">
                   <label for="password">Password</label>
                   <div class="input-wrapper">
                     <i class="fas fa-lock input-icon"></i>
-                    <input 
-                      type="password" 
-                      id="password" 
-                      placeholder="Enter your password" 
-                      autofocus
-                      required
-                    >
+                    <input type="password" id="password" placeholder="Enter your password" autofocus required>
                     <button type="button" class="password-toggle" id="togglePassword" tabindex="-1">
                       <i class="fa-regular fa-eye"></i>
                     </button>
                   </div>
                 </div>
-                
-                <button type="submit" id="submitBtn">
-                  <span>Access Link</span>
-                  <i class="fas fa-arrow-right"></i>
-                </button>
-                
-                <div class="loading" id="loading">
-                  <i class="fas fa-spinner"></i> Verifying...
-                </div>
+                <button type="submit" id="submitBtn"><span>Access Link</span><i class="fas fa-arrow-right"></i></button>
+                <div class="loading" id="loading"><i class="fas fa-spinner"></i> Verifying...</div>
               </form>
-              
-              <div class="security-badge">
-                <span><i class="fas fa-lock"></i> 256-bit SSL</span>
-                <span><i class="fas fa-shield"></i> Encrypted</span>
-                <span><i class="fas fa-clock"></i> Secure</span>
-              </div>
-              
-              <div class="footer">
-                <i class="fas fa-shield-halved"></i> Redirector Pro • Secure Link Protection
-              </div>
+              <div class="security-badge"><span><i class="fas fa-lock"></i> 256-bit SSL</span><span><i class="fas fa-shield"></i> Encrypted</span><span><i class="fas fa-clock"></i> Secure</span></div>
+              <div class="footer"><i class="fas fa-shield-halved"></i> Redirector Pro • Secure Link Protection</div>
             </div>
           </div>
-          
           <script nonce="${nonce}">
-            const form = document.getElementById('passwordForm');
-            const passwordInput = document.getElementById('password');
-            const submitBtn = document.getElementById('submitBtn');
-            const loading = document.getElementById('loading');
-            const errorAlert = document.getElementById('errorAlert');
-            const errorMessage = document.getElementById('errorMessage');
-            const togglePassword = document.getElementById('togglePassword');
-            
-            togglePassword.addEventListener('click', () => {
-              const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
-              passwordInput.setAttribute('type', type);
-              togglePassword.querySelector('i').className = type === 'password' ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
-            });
-            
-            form.addEventListener('submit', async (e) => {
-              e.preventDefault();
-              
-              const password = passwordInput.value.trim();
-              
-              if (!password) {
-                showError('Please enter a password');
-                return;
-              }
-              
-              submitBtn.disabled = true;
-              loading.style.display = 'block';
-              errorAlert.style.display = 'none';
-              
-              try {
-                const response = await fetch('/v/${linkId}/verify', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ password })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok && data.success) {
-                  window.location.href = data.redirect ? data.target : data.target;
-                } else {
-                  showError(data.error || 'Invalid password');
-                  submitBtn.disabled = false;
-                  loading.style.display = 'none';
-                  passwordInput.value = '';
-                  passwordInput.focus();
-                }
-              } catch (err) {
-                showError('Connection error. Please try again.');
-                submitBtn.disabled = false;
-                loading.style.display = 'none';
-              }
-            });
-            
-            function showError(message) {
-              errorMessage.textContent = message;
-              errorAlert.style.display = 'flex';
-              
-              setTimeout(() => {
-                errorAlert.style.display = 'none';
-              }, 3000);
-            }
-            
-            passwordInput.addEventListener('keypress', (e) => {
-              if (e.key === 'Enter' && !submitBtn.disabled) {
-                form.dispatchEvent(new Event('submit'));
-              }
-            });
-            
-            passwordInput.addEventListener('input', () => {
-              errorAlert.style.display = 'none';
-            });
+            const form=document.getElementById('passwordForm');const passwordInput=document.getElementById('password');const submitBtn=document.getElementById('submitBtn');const loading=document.getElementById('loading');const errorAlert=document.getElementById('errorAlert');const errorMessage=document.getElementById('errorMessage');const togglePassword=document.getElementById('togglePassword');
+            togglePassword.addEventListener('click',()=>{const type=passwordInput.getAttribute('type')==='password'?'text':'password';passwordInput.setAttribute('type',type);togglePassword.querySelector('i').className=type==='password'?'fa-regular fa-eye':'fa-regular fa-eye-slash'});
+            form.addEventListener('submit',async(e)=>{e.preventDefault();const password=passwordInput.value.trim();if(!password){showError('Please enter a password');return}
+            submitBtn.disabled=true;loading.style.display='block';errorAlert.style.display='none';try{const response=await fetch('/v/${linkId}/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});const data=await response.json();if(response.ok&&data.success){window.location.href=data.redirect?data.target:data.target}else{showError(data.error||'Invalid password');submitBtn.disabled=false;loading.style.display='none';passwordInput.value='';passwordInput.focus()}}catch(err){showError('Connection error. Please try again.');submitBtn.disabled=false;loading.style.display='none'}});
+            function showError(message){errorMessage.textContent=message;errorAlert.style.display='flex';setTimeout(()=>{errorAlert.style.display='none'},3000)}
+            passwordInput.addEventListener('keypress',(e)=>{if(e.key==='Enter'&&!submitBtn.disabled){form.dispatchEvent(new Event('submit'))}});
+            passwordInput.addEventListener('input',()=>{errorAlert.style.display='none'});
           </script>
         </body>
         </html>
       `);
     }
 
-    // Handle QR code display - Dark Theme
     if (showQr) {
       const qrData = await QRCode.toDataURL(data.target);
       return res.send(`
@@ -3113,48 +3168,12 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <meta http-equiv="refresh" content="5;url=${data.target}">
           <style>
-            body {
-              min-height: 100vh;
-              background: #000;
-              color: #ddd;
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              margin: 0;
-              padding: 20px;
-            }
-            .card {
-              background: #0a0a0a;
-              padding: 2rem;
-              border-radius: 24px;
-              text-align: center;
-              max-width: 400px;
-              border: 1px solid #1a1a1a;
-              box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
-            }
-            h2 {
-              font-size: 1.5rem;
-              margin-bottom: 1rem;
-              color: #e0e0e0;
-              font-weight: 400;
-            }
-            img {
-              max-width: 100%;
-              height: auto;
-              border-radius: 16px;
-              margin: 1rem 0;
-              border: 1px solid #2a2a2a;
-            }
-            p {
-              color: #888;
-              margin: 0.5rem 0;
-            }
-            .countdown {
-              color: #4ade80;
-              font-weight: bold;
-              margin-top: 1rem;
-            }
+            body{min-height:100vh;background:#000;color:#ddd;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;margin:0;padding:20px}
+            .card{background:#0a0a0a;padding:2rem;border-radius:24px;text-align:center;max-width:400px;border:1px solid #1a1a1a;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5)}
+            h2{font-size:1.5rem;margin-bottom:1rem;color:#e0e0e0;font-weight:400}
+            img{max-width:100%;height:auto;border-radius:16px;margin:1rem 0;border:1px solid #2a2a2a}
+            p{color:#888;margin:0.5rem 0}
+            .countdown{color:#4ade80;font-weight:bold;margin-top:1rem}
           </style>
         </head>
         <body>
@@ -3164,23 +3183,12 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
             <p>Or continue to website...</p>
             <div class="countdown">Redirecting in <span id="countdown">5</span> seconds</div>
           </div>
-          <script nonce="${res.locals.nonce}">
-            let time = 5;
-            const interval = setInterval(() => {
-              time--;
-              document.getElementById('countdown').textContent = time;
-              if (time <= 0) {
-                clearInterval(interval);
-                window.location.href = '${data.target}';
-              }
-            }, 1000);
-          </script>
+          <script nonce="${res.locals.nonce}">let time=5;const interval=setInterval(()=>{time--;document.getElementById('countdown').textContent=time;if(time<=0){clearInterval(interval);window.location.href='${data.target}'}},1000);</script>
         </body>
         </html>
       `);
     }
 
-    // Mobile redirect
     if (deviceInfo.isMobile) {
       stats.successfulRedirects++;
       return res.send(`<!DOCTYPE html>
@@ -3195,13 +3203,11 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
 </html>`);
     }
 
-    // Desktop challenge (if enabled)
     if (validatedConfig.DISABLE_DESKTOP_CHALLENGE) {
       stats.successfulRedirects++;
       return res.send(`<meta http-equiv="refresh" content="0;url=${data.target}">`);
     }
 
-    // Human verification challenge
     const hpSuffix = crypto.randomBytes(2).toString('hex');
     const nonce = res.locals.nonce;
 
@@ -3267,7 +3273,7 @@ app.get('/v/:id', strictLimiter, async (req, res, next) => {
   }
 });
 
-// Expired Link Page - Dark Theme
+// Expired Link Page
 app.get('/expired', (req, res) => {
   const originalTarget = req.query.target || BOT_URLS[0];
   const nonce = res.locals.nonce;
@@ -3378,7 +3384,6 @@ app.get('/qr/download', async (req, res, next) => {
 
 // Admin Routes - Serve HTML
 app.get('/admin/login', (req, res) => {
-  // Block any requests with query parameters
   if (Object.keys(req.query).length > 0) {
     logger.warn('🚫 Blocked login attempt with query params', { 
       ip: req.ip, 
@@ -3391,25 +3396,20 @@ app.get('/admin/login', (req, res) => {
     return res.redirect('/admin');
   }
   
-  // Regenerate session ID to prevent fixation
   req.session.regenerate(async (err) => {
     if (err) {
       logger.error('Session regeneration error:', err);
     }
     
-    // Generate new CSRF token
     const csrfToken = crypto.randomBytes(32).toString('hex');
     req.session.csrfToken = csrfToken;
     
-    // Generate nonce for CSP
     const nonce = crypto.randomBytes(16).toString('hex');
     
     try {
-      // Read the login.html file
       const loginHtmlPath = path.join(__dirname, 'public', 'login.html');
       let html = await fs.readFile(loginHtmlPath, 'utf8');
       
-      // Inject the CSRF token and nonce
       html = html
         .replace(
           '<input type="hidden" id="csrfToken" value="">',
@@ -3420,7 +3420,6 @@ app.get('/admin/login', (req, res) => {
           nonce
         );
       
-      // Set CSP with nonce for this response
       res.setHeader(
         'Content-Security-Policy',
         `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' https://cdnjs.cloudflare.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss: https://cdn.socket.io https://cdn.jsdelivr.net;`
@@ -3440,7 +3439,6 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
     
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
     
-    // Check if IP is blocked (with error handling)
     if (dbPool) {
       try {
         const blocked = await dbPool.query(
@@ -3452,7 +3450,6 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
           throw new AppError('Access denied', 403);
         }
       } catch (dbErr) {
-        // If table doesn't exist, log but continue
         if (dbErr.code === '42P01') {
           logger.warn('blocked_ips table not found, skipping IP block check');
         } else {
@@ -3461,23 +3458,19 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
       }
     }
     
-    // Check for credentials in URL (should never happen in POST)
     if (req.url.includes('?') || Object.keys(req.query).length > 0) {
       logger.error('Login POST with query parameters', { ip, url: req.url });
       throw new AppError('Invalid request format', 400);
     }
     
-    // Track login attempts
     const attemptData = loginAttempts.get(ip) || { count: 0, lastAttempt: Date.now() };
     attemptData.count++;
     attemptData.lastAttempt = Date.now();
     loginAttempts.set(ip, attemptData);
     
-    // Progressive rate limiting
     if (attemptData.count > 10) {
       logger.error(`Excessive login attempts from ${ip}: ${attemptData.count}`);
       
-      // Block IP in database
       if (dbPool) {
         try {
           await dbPool.query(
@@ -3493,18 +3486,14 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
     }
     
     if (attemptData.count > 5) {
-      // Add delay for suspicious attempts
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
-    // Validate input
     if (!username || !password) {
       throw new AppError('Username and password required', 400);
     }
     
-    // Check credentials
     if (username === ADMIN_USERNAME && await bcrypt.compare(password, ADMIN_PASSWORD_HASH)) {
-      // Successful login - reset attempts
       loginAttempts.delete(ip);
       
       req.session.regenerate((err) => {
@@ -3518,11 +3507,10 @@ app.post('/admin/login', csrfProtection, express.json(), async (req, res, next) 
         req.session.loginTime = Date.now();
         req.session.csrfToken = crypto.randomBytes(32).toString('hex');
         
-        // Set session length based on remember me
         if (remember) {
-          req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+          req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
         } else {
-          req.session.cookie.maxAge = 24 * 60 * 60 * 1000; // 24 hours
+          req.session.cookie.maxAge = 24 * 60 * 60 * 1000;
         }
         
         logger.info('Successful admin login', { ip, username });
@@ -3544,11 +3532,9 @@ app.get('/admin', async (req, res, next) => {
   }
   
   try {
-    // Read the dashboard HTML file
     const dashboardPath = path.join(__dirname, 'public', 'index.html');
     let html = await fs.readFile(dashboardPath, 'utf8');
     
-    // Replace template variables
     const replacements = {
       '{{METRICS_API_KEY}}': METRICS_API_KEY,
       '{{TARGET_URL}}': TARGET_URL,
@@ -3556,29 +3542,31 @@ app.get('/admin', async (req, res, next) => {
       '{{dbPoolStatus}}': dbPool ? 'connected' : 'disconnected',
       '{{redisStatus}}': redisClient?.status === 'ready' ? 'connected' : 'disconnected',
       '{{redirectQueueStatus}}': redirectQueue ? 'connected' : 'disconnected',
+      '{{encodingQueueStatus}}': encodingQueue ? 'connected' : 'disconnected',
       '{{bullBoardPath}}': validatedConfig.BULL_BOARD_PATH,
       '{{linkLengthMode}}': LINK_LENGTH_MODE,
       '{{allowLinkModeSwitch}}': ALLOW_LINK_MODE_SWITCH,
       '{{longLinkSegments}}': LONG_LINK_SEGMENTS,
       '{{longLinkParams}}': LONG_LINK_PARAMS,
-      '{{linkEncodingLayers}}': LINK_ENCODING_LAYERS
+      '{{linkEncodingLayers}}': LINK_ENCODING_LAYERS,
+      '{{enableCompression}}': ENABLE_COMPRESSION,
+      '{{enableEncryption}}': ENABLE_ENCRYPTION,
+      '{{maxEncodingIterations}}': MAX_ENCODING_ITERATIONS,
+      '{{encodingComplexityThreshold}}': ENCODING_COMPLEXITY_THRESHOLD
     };
     
     for (const [key, value] of Object.entries(replacements)) {
       html = html.replace(new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), value);
     }
     
-    // Generate nonce for CSP
     const nonce = crypto.randomBytes(16).toString('hex');
     res.locals.nonce = nonce;
     
-    // Set CSP header with proper connect-src for source maps
     res.setHeader(
       'Content-Security-Policy',
       `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com https://fonts.gstatic.com; font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' ws: wss: https://cdn.socket.io https://cdn.jsdelivr.net;`
     );
     
-    // Inject nonce into script tag
     html = html.replace(
       '<script nonce="{{NONCE}}">',
       `<script nonce="${nonce}">`
@@ -3610,7 +3598,7 @@ app.post('/admin/clear-cache', csrfProtection, (req, res) => {
   geoCache.flushAll();
   deviceCache.flushAll();
   qrCache.flushAll();
-  encodingConfigCache.flushAll();
+  encodingCache.flushAll();
   
   logger.info('Cache cleared by admin');
   res.json({ success: true });
@@ -3631,7 +3619,7 @@ app.get('/admin/export-logs', async (req, res, next) => {
   }
 });
 
-// Export link data - FIXED column references
+// Export link data
 app.get('/api/export/:id', async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -3646,7 +3634,7 @@ app.get('/api/export/:id', async (req, res, next) => {
     }
     
     const result = await dbPool.query(
-      `SELECT id, link_id, ip, country, device_type, link_mode, created_at 
+      `SELECT id, link_id, ip, country, device_type, link_mode, encoding_layers, decoding_time_ms, created_at 
        FROM clicks 
        WHERE link_id = $1 
        ORDER BY created_at DESC`,
@@ -3654,7 +3642,7 @@ app.get('/api/export/:id', async (req, res, next) => {
     );
     
     if (format === 'csv') {
-      const headers = ['id', 'link_id', 'ip', 'country', 'device_type', 'link_mode', 'created_at'];
+      const headers = ['id', 'link_id', 'ip', 'country', 'device_type', 'link_mode', 'encoding_layers', 'decoding_time_ms', 'created_at'];
       const csv = [
         headers.join(','),
         ...result.rows.map(row => 
@@ -3696,7 +3684,7 @@ app.get('/admin/security/monitor', (req, res) => {
   }
   
   res.json({
-    blockedIPs: [], // Would need to query database for this
+    blockedIPs: [],
     activeAttacks: activeAttacks.sort((a, b) => b.attempts - a.attempts),
     totalAttempts: Array.from(loginAttempts.values()).reduce((sum, d) => sum + d.count, 0)
   });
@@ -3753,6 +3741,7 @@ async function gracefulShutdown(signal) {
     if (redirectQueue) await redirectQueue.close();
     if (emailQueue) await emailQueue.close();
     if (analyticsQueue) await analyticsQueue.close();
+    if (encodingQueue) await encodingQueue.close();
     if (dbPool) await dbPool.end();
     if (redisClient) await redisClient.quit();
     await new Promise((resolve) => server.close(resolve));
@@ -3778,58 +3767,73 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Create public directory if it doesn't exist
-async function ensurePublicDirectory() {
-  try {
-    await fs.mkdir('public', { recursive: true });
-  } catch (err) {
-    // Directory already exists
-  }
-}
-
 // Start Server
-ensurePublicDirectory().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log('\n' + '='.repeat(80));
-    console.log(`  🚀 Redirector Pro v3.0 - Enterprise Edition`);
-    console.log('='.repeat(80));
-    console.log(`  📡 Port: ${PORT}`);
-    console.log(`  🔑 Metrics Key: ${METRICS_API_KEY.substring(0, 8)}...`);
-    console.log(`  ⏱️  Link TTL: ${formatDuration(LINK_TTL_SEC)}`);
-    console.log(`  📊 Max Links: ${MAX_LINKS.toLocaleString()}`);
-    console.log(`  📱 Mobile threshold: 20`);
-    console.log(`  💻 Desktop threshold: 65`);
-    console.log(`  🔗 Link Mode: ${LINK_LENGTH_MODE} (${ALLOW_LINK_MODE_SWITCH ? 'switchable' : 'fixed'})`);
-    console.log(`  📏 Long Link Segments: ${LONG_LINK_SEGMENTS} | Params: ${LONG_LINK_PARAMS} | Layers: ${LINK_ENCODING_LAYERS}`);
-    console.log(`  🗄️  Session Store: ${sessionStore.constructor.name}`);
-    console.log(`  📍 Admin UI: http://localhost:${PORT}/admin`);
-    console.log(`  🔐 Default admin: ${ADMIN_USERNAME} / [protected]`);
-    console.log(`  📊 Real-time monitoring: Active`);
-    console.log(`  💾 Database: ${dbPool ? 'Connected' : 'Disabled'}`);
-    console.log(`  🔄 Redis: ${redisClient?.status === 'ready' ? 'Connected' : 'Disabled'}`);
-    console.log(`  📨 Queues: ${redirectQueue ? 'Enabled' : 'Disabled'}`);
-    if (serverAdapter && validatedConfig.BULL_BOARD_ENABLED) {
-      console.log(`  📊 Bull Board: http://localhost:${PORT}${validatedConfig.BULL_BOARD_PATH}`);
-    }
-    console.log('='.repeat(80) + '\n');
+(async () => {
+  try {
+    await fs.mkdir('logs', { recursive: true });
+    await fs.mkdir('public', { recursive: true });
     
-    logger.info('Server started', {
-      port: PORT,
-      nodeEnv: NODE_ENV,
-      version: '3.0.0',
-      linkMode: LINK_LENGTH_MODE
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log('\n' + '='.repeat(80));
+      console.log(`  🚀 Redirector Pro v3.0 - Enterprise Edition`);
+      console.log('='.repeat(80));
+      console.log(`  📡 Port: ${PORT}`);
+      console.log(`  🔑 Metrics Key: ${METRICS_API_KEY.substring(0, 8)}...`);
+      console.log(`  ⏱️  Link TTL: ${formatDuration(LINK_TTL_SEC)}`);
+      console.log(`  📊 Max Links: ${MAX_LINKS.toLocaleString()}`);
+      console.log(`  📱 Mobile threshold: 20`);
+      console.log(`  💻 Desktop threshold: 65`);
+      console.log(`  🔗 Link Mode: ${LINK_LENGTH_MODE} (${ALLOW_LINK_MODE_SWITCH ? 'switchable' : 'fixed'})`);
+      console.log(`  📏 Long Link Segments: ${LONG_LINK_SEGMENTS} | Params: ${LONG_LINK_PARAMS} | Layers: ${LINK_ENCODING_LAYERS}`);
+      console.log(`  🔐 Encryption: ${ENABLE_ENCRYPTION ? 'Enabled' : 'Disabled'}`);
+      console.log(`  📦 Compression: ${ENABLE_COMPRESSION ? 'Enabled' : 'Disabled'}`);
+      console.log(`  🔄 Max Iterations: ${MAX_ENCODING_ITERATIONS}`);
+      console.log(`  📊 Complexity Threshold: ${ENCODING_COMPLEXITY_THRESHOLD}`);
+      console.log(`  🗄️  Session Store: ${sessionStore.constructor.name}`);
+      console.log(`  📍 Admin UI: http://localhost:${PORT}/admin`);
+      console.log(`  🔐 Default admin: ${ADMIN_USERNAME} / [protected]`);
+      console.log(`  📊 Real-time monitoring: Active`);
+      console.log(`  💾 Database: ${dbPool ? 'Connected' : 'Disabled'}`);
+      console.log(`  🔄 Redis: ${redisClient?.status === 'ready' ? 'Connected' : 'Disabled'}`);
+      console.log(`  📨 Queues: ${redirectQueue ? 'Enabled' : 'Disabled'}`);
+      if (serverAdapter && validatedConfig.BULL_BOARD_ENABLED) {
+        console.log(`  📊 Bull Board: http://localhost:${PORT}${validatedConfig.BULL_BOARD_PATH}`);
+      }
+      console.log('='.repeat(80) + '\n');
+      
+      logger.info('Server started', {
+        port: PORT,
+        nodeEnv: NODE_ENV,
+        version: '3.0.0',
+        linkMode: LINK_LENGTH_MODE,
+        encoding: {
+          layers: LINK_ENCODING_LAYERS,
+          compression: ENABLE_COMPRESSION,
+          encryption: ENABLE_ENCRYPTION,
+          iterations: MAX_ENCODING_ITERATIONS,
+          complexityThreshold: ENCODING_COMPLEXITY_THRESHOLD
+        }
+      });
+      
+      fs.appendFile(REQUEST_LOG_FILE, JSON.stringify({
+        t: Date.now(),
+        type: 'startup',
+        version: '3.0.0-enterprise',
+        port: PORT,
+        nodeEnv: NODE_ENV,
+        linkMode: LINK_LENGTH_MODE,
+        encoding: {
+          layers: LINK_ENCODING_LAYERS,
+          compression: ENABLE_COMPRESSION,
+          encryption: ENABLE_ENCRYPTION
+        }
+      }) + '\n').catch(() => {});
     });
-    
-    fs.appendFile(REQUEST_LOG_FILE, JSON.stringify({
-      t: Date.now(),
-      type: 'startup',
-      version: '3.0.0-enterprise',
-      port: PORT,
-      nodeEnv: NODE_ENV,
-      linkMode: LINK_LENGTH_MODE
-    }) + '\n').catch(() => {});
-  });
-});
+  } catch (err) {
+    logger.error('Failed to start server:', err);
+    process.exit(1);
+  }
+})();
 
 server.keepAliveTimeout = 30000;
 server.headersTimeout = 31000;
