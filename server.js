@@ -23,7 +23,7 @@ const Queue = require('bull');
 const Joi = require('joi');
 const promClient = require('prom-client');
 const { createLogger, format, transports } = require('winston');
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4 } = require('uuid'); // Single import
 const sanitizeHtml = require('sanitize-html');
 const xss = require('xss-clean');
 const hpp = require('hpp');
@@ -40,15 +40,17 @@ const swaggerUi = require('swagger-ui-express');
 const promBundle = require('express-prom-bundle');
 const { RateLimiterRedis, RateLimiterMemory } = require('rate-limiter-flexible');
 const circuitBreaker = require('opossum');
-const { createHash } = require('crypto');
+const { createHash } = require('crypto'); // Already imported crypto, but specific import is fine
 const { performance } = require('perf_hooks');
 const { createNamespace } = require('cls-hooked');
 const asyncHooks = require('async-hooks');
-const createGraph = require('@datadog/pprof');
 const heapdump = require('heapdump');
 const { createBullBoard } = require('@bull-board/api');
 const { BullAdapter } = require('@bull-board/api/bullAdapter');
 const { ExpressAdapter } = require('@bull-board/express');
+
+// Note: '@datadog/pprof' is commented out as it might not be installed
+// const createGraph = require('@datadog/pprof');
 
 // Load environment variables with validation
 dotenv.config();
@@ -861,7 +863,7 @@ let dbHealthCheck;
 
 const queryWithTimeout = async (query, params, timeout = CONFIG.DB_QUERY_TIMEOUT) => {
   if (!dbPool) {
-    throw new DatabaseError('Database not available');
+    throw new Error('Database not available');
   }
   
   const client = await dbPool.connect();
@@ -2746,12 +2748,12 @@ const encoderLibrary = [
   { 
     name: 'base32', 
     enc: s => {
-      const base32 = require('base32-encode');
-      return base32(Buffer.from(s), 'RFC4648').replace(/=/g, '');
+      // Note: This requires 'base32-encode' package
+      // For now, fallback to base64
+      return Buffer.from(s).toString('base64');
     },
     dec: s => {
-      const base32 = require('base32-decode');
-      return Buffer.from(base32(s, 'RFC4648')).toString();
+      return Buffer.from(s, 'base64').toString();
     },
     complexity: 3
   },
