@@ -43,7 +43,7 @@ const circuitBreaker = require('opossum');
 const { createHash } = require('crypto'); // Already imported crypto, but specific import is fine
 const { performance } = require('perf_hooks');
 const { createNamespace } = require('cls-hooked');
-const asyncHooks = require('async-hooks');
+const async_hooks = require('async_hooks');
 const heapdump = require('heapdump');
 const { createBullBoard } = require('@bull-board/api');
 const { BullAdapter } = require('@bull-board/api/bullAdapter');
@@ -466,7 +466,7 @@ const businessMetrics = {
 // ─── Async Hook for Request Context ─────────────────────────────────────────
 const sessionNamespace = createNamespace('request-context');
 
-const asyncHook = asyncHooks.createHook({
+const asyncHook = async_hooks.createHook({
   init(asyncId, type, triggerAsyncId, resource) {
     const session = sessionNamespace.get('session');
     if (session) {
