@@ -1092,14 +1092,12 @@
             <span id="uptimeValue">0h 0m</span>
           </div>
           
-          <!-- Removed inline onclick, added ID -->
           <button class="btn btn-sm" id="logoutBtn">
             <i class="fas fa-sign-out-alt"></i>
             <span>Logout</span>
           </button>
         </div>
         
-        <!-- Removed inline onclick, added ID -->
         <button class="menu-toggle" id="menuToggle">
           <i class="fas fa-bars"></i>
         </button>
@@ -1110,7 +1108,6 @@
       <!-- Sidebar -->
       <aside class="sidebar" id="sidebar">
         <nav class="sidebar-nav">
-          <!-- Removed all inline onclicks, added data-tab attributes -->
           <div class="nav-item active" data-tab="dashboard">
             <i class="fas fa-chart-line"></i>
             <span>Dashboard</span>
@@ -1184,12 +1181,12 @@
             
             <div class="stat-card">
               <div class="stat-header">
-                <span class="stat-title">Success Rate</span>
-                <span class="stat-icon"><i class="fas fa-check-circle"></i></span>
+                <span class="stat-title">Link Mode Stats</span>
+                <span class="stat-icon"><i class="fas fa-chart-pie"></i></span>
               </div>
-              <div class="stat-value" id="successRate">0%</div>
+              <div class="stat-value" id="linkModes">S:0 L:0</div>
               <div class="stat-trend">
-                <span>Last 24 hours</span>
+                <span>Short / Long</span>
               </div>
             </div>
           </div>
@@ -1199,7 +1196,6 @@
               <div class="chart-header">
                 <h3 class="chart-title">Request Timeline</h3>
                 <div class="btn-group">
-                  <!-- Added data-time-range attributes -->
                   <button class="btn btn-sm btn-secondary" data-time-range="1m">1m</button>
                   <button class="btn btn-sm btn-secondary" data-time-range="5m">5m</button>
                   <button class="btn btn-sm btn-secondary" data-time-range="15m">15m</button>
@@ -1265,6 +1261,38 @@
               
               <div>
                 <div class="form-group">
+                  <label class="form-label">Link Mode</label>
+                  <div class="btn-group" style="margin-bottom: 0.5rem;" id="linkModeGroup">
+                    <button type="button" class="btn btn-sm btn-secondary link-mode-btn" data-mode="short" data-selected="true">Short</button>
+                    <button type="button" class="btn btn-sm btn-secondary link-mode-btn" data-mode="long">Long</button>
+                    <button type="button" class="btn btn-sm btn-secondary link-mode-btn" data-mode="auto">Auto</button>
+                  </div>
+                  <div class="link-mode-info" style="font-size: var(--font-size-xs); color: #666;">
+                    <span id="linkModeHelp">Short: Clean, simple URLs (/v/id)</span>
+                  </div>
+                </div>
+                
+                <div class="form-group" id="longLinkOptions" style="display: none;">
+                  <label class="form-label">Long Link Configuration</label>
+                  <select class="form-control" id="longLinkPreset">
+                    <option value="standard">Standard (balanced)</option>
+                    <option value="aggressive">Aggressive (very long)</option>
+                    <option value="stealth">Stealth (max security)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                  
+                  <div id="customLongOptions" style="margin-top: 0.5rem; display: none;">
+                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                      <input type="number" class="form-control" id="longLinkSegments" placeholder="Segments (3-20)" min="3" max="20" value="{{longLinkSegments}}">
+                      <input type="number" class="form-control" id="longLinkParams" placeholder="Params (5-30)" min="5" max="30" value="{{longLinkParams}}">
+                    </div>
+                    <div>
+                      <input type="number" class="form-control" id="linkEncodingLayers" placeholder="Encoding layers (2-8)" min="2" max="8" value="{{linkEncodingLayers}}">
+                    </div>
+                  </div>
+                </div>
+                
+                <div class="form-group">
                   <label class="form-label">Max Clicks</label>
                   <input type="number" class="form-control" id="maxClicks" placeholder="Unlimited" min="1">
                 </div>
@@ -1299,7 +1327,6 @@
             </div>
             
             <div class="btn-group">
-              <!-- Added data-action attributes -->
               <button class="btn" data-action="generate">
                 <i class="fas fa-magic"></i>
                 Generate Link
@@ -1317,11 +1344,11 @@
                   <i class="fas fa-check-circle" style="color: var(--success-500);"></i>
                   Link Generated Successfully
                 </h4>
+                <span class="badge badge-info" id="generatedMode">Short Link</span>
               </div>
               
               <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
                 <input type="text" class="form-control" id="generatedUrl" readonly>
-                <!-- Added data-action attributes -->
                 <button class="btn btn-secondary" data-action="copy">
                   <i class="fas fa-copy"></i>
                 </button>
@@ -1340,6 +1367,10 @@
                 <div>
                   <span class="badge badge-info">Expires</span>
                   <div id="generatedExpires" style="margin-top: 0.5rem;"></div>
+                </div>
+                <div>
+                  <span class="badge badge-info">Length</span>
+                  <div id="generatedLength" style="margin-top: 0.5rem;"></div>
                 </div>
                 <div>
                   <span class="badge badge-info">Protected</span>
@@ -1367,7 +1398,11 @@
                   <option value="expired">Expired</option>
                   <option value="completed">Completed</option>
                 </select>
-                <!-- Added data-action attribute -->
+                <select class="form-control" id="linkModeFilter" style="width: 120px;">
+                  <option value="all">All Modes</option>
+                  <option value="short">Short Only</option>
+                  <option value="long">Long Only</option>
+                </select>
                 <button class="btn btn-secondary" data-action="refresh">
                   <i class="fas fa-sync-alt"></i>
                 </button>
@@ -1379,6 +1414,7 @@
                 <thead>
                   <tr>
                     <th>ID</th>
+                    <th>Mode</th>
                     <th>Target URL</th>
                     <th>Created</th>
                     <th>Expires</th>
@@ -1389,7 +1425,7 @@
                 </thead>
                 <tbody id="linksTableBody">
                   <tr>
-                    <td colspan="7" style="text-align: center; padding: 2rem;">
+                    <td colspan="8" style="text-align: center; padding: 2rem;">
                       <i class="fas fa-spinner fa-spin"></i> Loading links...
                     </td>
                   </tr>
@@ -1415,7 +1451,6 @@
                   <label class="form-label">Enter Link ID</label>
                   <input type="text" class="form-control" id="analyticsLinkId" placeholder="e.g., a1b2c3d4e5f6g7h8...">
                 </div>
-                <!-- Added data-action attribute -->
                 <button class="btn" data-action="getStats">
                   <i class="fas fa-chart-line"></i> Get Statistics
                 </button>
@@ -1425,7 +1460,6 @@
                 <div class="form-group">
                   <label class="form-label">Export Options</label>
                   <div class="btn-group">
-                    <!-- Added data-export attributes -->
                     <button class="btn btn-secondary" data-export="csv">
                       <i class="fas fa-file-csv"></i> CSV
                     </button>
@@ -1454,6 +1488,7 @@
                         <th>IP</th>
                         <th>Country</th>
                         <th>Device</th>
+                        <th>Mode</th>
                       </tr>
                     </thead>
                     <tbody id="recentClicksTable"></tbody>
@@ -1464,7 +1499,7 @@
           </div>
         </div>
         
-        <!-- Live Logs Tab - Enhanced -->
+        <!-- Live Logs Tab -->
         <div id="logs" class="tab-content">
           <div class="section-card">
             <div class="section-header">
@@ -1474,7 +1509,6 @@
               </h3>
               
               <div class="btn-group">
-                <!-- Added data-action attributes -->
                 <button class="btn btn-secondary" data-action="clearLogs">
                   <i class="fas fa-trash"></i> Clear
                 </button>
@@ -1506,6 +1540,55 @@
         <!-- Settings Tab -->
         <div id="settings" class="tab-content">
           <div class="grid-2" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem;">
+            <!-- Link Mode Settings -->
+            <div class="section-card">
+              <h3 class="section-title" style="margin-bottom: 1.5rem;">
+                <i class="fas fa-link"></i>
+                Link Mode Configuration
+              </h3>
+              
+              <div class="form-group">
+                <label class="form-label">Default Link Mode</label>
+                <select class="form-control" id="settingLinkLengthMode">
+                  <option value="short">Short Links (clean, simple)</option>
+                  <option value="long">Long Links (obfuscated, secure)</option>
+                  <option value="auto">Auto (choose based on URL)</option>
+                </select>
+              </div>
+              
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                <span>Allow Mode Switching</span>
+                <label class="toggle">
+                  <input type="checkbox" id="settingAllowLinkModeSwitch" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">Long Link Segments (3-20)</label>
+                <input type="number" class="form-control" id="settingLongLinkSegments" min="3" max="20" value="{{longLinkSegments}}">
+                <small style="color: #666;">Number of path segments in long URLs</small>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">Long Link Parameters (5-30)</label>
+                <input type="number" class="form-control" id="settingLongLinkParams" min="5" max="30" value="{{longLinkParams}}">
+                <small style="color: #666;">Number of query parameters</small>
+              </div>
+              
+              <div class="form-group">
+                <label class="form-label">Encoding Layers (2-8)</label>
+                <input type="number" class="form-control" id="settingLinkEncodingLayers" min="2" max="8" value="{{linkEncodingLayers}}">
+                <small style="color: #666;">More layers = longer, more secure URLs</small>
+              </div>
+              
+              <div class="btn-group" style="margin-top: 1rem;">
+                <button class="btn" data-action="testLinkModes">
+                  <i class="fas fa-flask"></i> Test Configurations
+                </button>
+              </div>
+            </div>
+            
             <!-- Cache Management -->
             <div class="section-card">
               <h3 class="section-title" style="margin-bottom: 1.5rem;">
@@ -1514,7 +1597,6 @@
               </h3>
               
               <div class="btn-group" style="margin-bottom: 2rem;">
-                <!-- Added data-cache attributes -->
                 <button class="btn btn-danger" data-cache="all">
                   <i class="fas fa-trash-alt"></i> Clear All
                 </button>
@@ -1524,9 +1606,12 @@
                 <button class="btn btn-secondary" data-cache="qr">
                   <i class="fas fa-qrcode"></i> Clear QR
                 </button>
+                <button class="btn btn-secondary" data-cache="encoding">
+                  <i class="fas fa-code"></i> Clear Encoding
+                </button>
               </div>
               
-              <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+              <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr);">
                 <div class="stat-item">
                   <div class="stat-label">Link Cache</div>
                   <div class="stat-number" id="cacheLinks">0</div>
@@ -1538,6 +1623,10 @@
                 <div class="stat-item">
                   <div class="stat-label">QR Cache</div>
                   <div class="stat-number" id="cacheQR">0</div>
+                </div>
+                <div class="stat-item">
+                  <div class="stat-label">Encoding Cache</div>
+                  <div class="stat-number" id="cacheEncoding">0</div>
                 </div>
               </div>
             </div>
@@ -1584,7 +1673,6 @@
                 </label>
               </div>
               
-              <!-- Added data-action attribute -->
               <button class="btn" style="width: 100%;" data-action="saveSettings">
                 <i class="fas fa-save"></i> Save Settings
               </button>
@@ -1645,12 +1733,27 @@
           <i class="fas fa-link"></i>
           Link Details
         </h3>
-        <!-- Removed inline onclick, added ID -->
         <button class="modal-close" id="modalClose">
           <i class="fas fa-times"></i>
         </button>
       </div>
       <div id="linkModalContent"></div>
+    </div>
+  </div>
+  
+  <!-- Link Mode Test Modal -->
+  <div class="modal" id="testModal">
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3 class="modal-title">
+          <i class="fas fa-flask"></i>
+          Link Mode Test Results
+        </h3>
+        <button class="modal-close" id="testModalClose">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div id="testModalContent"></div>
     </div>
   </div>
   
@@ -1663,6 +1766,11 @@
     const METRICS_API_KEY = '{{METRICS_API_KEY}}';
     const TARGET_URL = '{{TARGET_URL}}';
     const CSRF_TOKEN = '{{csrfToken}}';
+    const LINK_LENGTH_MODE = '{{linkLengthMode}}';
+    const ALLOW_LINK_MODE_SWITCH = {{allowLinkModeSwitch}};
+    const LONG_LINK_SEGMENTS = {{longLinkSegments}};
+    const LONG_LINK_PARAMS = {{longLinkParams}};
+    const LINK_ENCODING_LAYERS = {{linkEncodingLayers}};
     
     // State
     let socket;
@@ -1672,6 +1780,7 @@
     let showTimestamps = true;
     let currentTimeRange = '5m';
     let logCount = 0;
+    let selectedLinkMode = 'short';
     
     // Initialize Socket.IO
     function initSocket() {
@@ -1695,6 +1804,7 @@
         // Request initial data
         socket.emit('command', { action: 'getStats' });
         socket.emit('command', { action: 'getLinks' });
+        socket.emit('command', { action: 'getConfig' });
       });
       
       socket.on('disconnect', (reason) => {
@@ -1714,9 +1824,14 @@
         updateCharts(data);
         updateCountryStats(data.byCountry);
         updateCacheStats(data.caches);
+        updateLinkModeStats(data.linkModes);
       });
       
-      // ENHANCED: Log handler with better formatting
+      socket.on('config', (data) => {
+        console.log('⚙️ Config received:', data);
+        updateConfig(data);
+      });
+      
       socket.on('log', (log) => {
         console.log('📝 Log received:', log);
         addLogEntry(log);
@@ -1751,7 +1866,7 @@
     }
     
     // ============================================
-    // Event Listeners Setup - REPLACES ALL INLINE ONCLICK
+    // Event Listeners Setup
     // ============================================
     function setupEventListeners() {
       console.log('🔧 Setting up event listeners...');
@@ -1764,6 +1879,7 @@
       
       // Modal close
       document.getElementById('modalClose')?.addEventListener('click', closeModal);
+      document.getElementById('testModalClose')?.addEventListener('click', closeTestModal);
       
       // Navigation items
       document.querySelectorAll('.nav-item[data-tab]').forEach(item => {
@@ -1786,6 +1902,27 @@
         btn.addEventListener('click', (e) => {
           setTimeRange(e.currentTarget.dataset.timeRange);
         });
+      });
+      
+      // Link mode selection
+      document.querySelectorAll('.link-mode-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const mode = e.currentTarget.dataset.mode;
+          selectLinkMode(mode);
+        });
+      });
+      
+      // Long link preset selection
+      document.getElementById('longLinkPreset')?.addEventListener('change', (e) => {
+        const preset = e.currentTarget.value;
+        const customOptions = document.getElementById('customLongOptions');
+        
+        if (preset === 'custom') {
+          customOptions.style.display = 'block';
+        } else {
+          customOptions.style.display = 'none';
+          applyLongLinkPreset(preset);
+        }
       });
       
       // Generate link button
@@ -1817,6 +1954,10 @@
       document.querySelector('[data-cache="all"]')?.addEventListener('click', clearCache);
       document.querySelector('[data-cache="geo"]')?.addEventListener('click', clearGeoCache);
       document.querySelector('[data-cache="qr"]')?.addEventListener('click', clearQRCache);
+      document.querySelector('[data-cache="encoding"]')?.addEventListener('click', clearEncodingCache);
+      
+      // Test link modes button
+      document.querySelector('[data-action="testLinkModes"]')?.addEventListener('click', testLinkModes);
       
       // Save settings button
       document.querySelector('[data-action="saveSettings"]')?.addEventListener('click', saveSettings);
@@ -1852,6 +1993,13 @@
       document.getElementById('linkFilter')?.addEventListener('change', () => {
         renderLinksTable(allLinks);
       });
+      
+      document.getElementById('linkModeFilter')?.addEventListener('change', () => {
+        renderLinksTable(allLinks);
+      });
+      
+      // Initialize link mode from config
+      selectLinkMode(LINK_LENGTH_MODE);
     }
     
     // UI Functions
@@ -1890,9 +2038,65 @@
       if (tabId === 'links') {
         refreshLinks();
       } else if (tabId === 'logs') {
-        // Log tab specific actions
         console.log('📋 Logs tab activated');
       }
+    }
+    
+    function selectLinkMode(mode) {
+      selectedLinkMode = mode;
+      
+      // Update button styles
+      document.querySelectorAll('.link-mode-btn').forEach(btn => {
+        btn.classList.remove('btn', 'btn-secondary');
+        btn.classList.add('btn', 'btn-secondary');
+        if (btn.dataset.mode === mode) {
+          btn.classList.add('btn');
+          btn.style.background = 'linear-gradient(90deg, #5a5a5a 0%, #8c8c8c 50%, #5a5a5a 100%)';
+        } else {
+          btn.style.background = '#1a1a1a';
+        }
+      });
+      
+      // Update help text
+      const helpText = document.getElementById('linkModeHelp');
+      if (mode === 'short') {
+        helpText.textContent = 'Short: Clean, simple URLs (/v/id)';
+        document.getElementById('longLinkOptions').style.display = 'none';
+      } else if (mode === 'long') {
+        helpText.textContent = 'Long: Obfuscated URLs with many segments and parameters';
+        document.getElementById('longLinkOptions').style.display = 'block';
+      } else {
+        helpText.textContent = 'Auto: Automatically choose based on URL length';
+        document.getElementById('longLinkOptions').style.display = 'block';
+      }
+    }
+    
+    function applyLongLinkPreset(preset) {
+      let segments, params, layers;
+      
+      switch(preset) {
+        case 'standard':
+          segments = 6;
+          params = 13;
+          layers = 4;
+          break;
+        case 'aggressive':
+          segments = 12;
+          params = 20;
+          layers = 6;
+          break;
+        case 'stealth':
+          segments = 18;
+          params = 28;
+          layers = 8;
+          break;
+        default:
+          return;
+      }
+      
+      document.getElementById('longLinkSegments').value = segments;
+      document.getElementById('longLinkParams').value = params;
+      document.getElementById('linkEncodingLayers').value = layers;
     }
     
     function showAlert(message, type = 'info') {
@@ -1931,11 +2135,36 @@
       document.getElementById('successRate').textContent = successRate + '%';
     }
     
+    function updateLinkModeStats(modes) {
+      if (modes) {
+        document.getElementById('linkModes').textContent = `S:${modes.short || 0} L:${modes.long || 0}`;
+      }
+    }
+    
     function updateCacheStats(caches) {
       if (caches) {
         document.getElementById('cacheLinks').textContent = formatNumber(caches.linkReq || 0);
         document.getElementById('cacheGeo').textContent = formatNumber(caches.geo || 0);
         document.getElementById('cacheQR').textContent = formatNumber(caches.qr || 0);
+        document.getElementById('cacheEncoding').textContent = formatNumber(caches.encoding || 0);
+      }
+    }
+    
+    function updateConfig(data) {
+      if (data.linkLengthMode) {
+        document.getElementById('settingLinkLengthMode').value = data.linkLengthMode;
+      }
+      if (data.allowLinkModeSwitch !== undefined) {
+        document.getElementById('settingAllowLinkModeSwitch').checked = data.allowLinkModeSwitch;
+      }
+      if (data.longLinkSegments) {
+        document.getElementById('settingLongLinkSegments').value = data.longLinkSegments;
+      }
+      if (data.longLinkParams) {
+        document.getElementById('settingLongLinkParams').value = data.longLinkParams;
+      }
+      if (data.linkEncodingLayers) {
+        document.getElementById('settingLinkEncodingLayers').value = data.linkEncodingLayers;
       }
     }
     
@@ -2116,7 +2345,6 @@
       `).join('');
     }
     
-    // ENHANCED: Add log entry with better formatting
     function addLogEntry(log) {
       const logs = document.getElementById('logs');
       if (!logs) return;
@@ -2159,6 +2387,9 @@
       } else if (type === '404') {
         typeClass = 'type-404';
         typeIcon = '404';
+      } else if (type === 'long-link-decode') {
+        typeClass = 'type-generate';
+        typeIcon = '🔓';
       }
       
       // Device icon
@@ -2192,6 +2423,10 @@
         logHtml += ` <span style="color: #f7768e;">[${log.reason}]</span>`;
       }
       
+      if (log.layers) {
+        logHtml += ` <span style="color: #bb9af7;">[${log.layers} layers]</span>`;
+      }
+      
       entry.innerHTML = logHtml;
       
       // Add to logs
@@ -2221,7 +2456,7 @@
       if (!links || links.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="7" style="text-align: center; padding: 2rem;">
+            <td colspan="8" style="text-align: center; padding: 2rem;">
               <i class="fas fa-link"></i> No links found
             </td>
           </tr>
@@ -2230,10 +2465,12 @@
       }
       
       const filter = document.getElementById('linkFilter').value;
+      const modeFilter = document.getElementById('linkModeFilter').value;
       const search = document.getElementById('linkSearch').value.toLowerCase();
       
       const filtered = links.filter(link => {
         if (filter !== 'all' && link.status !== filter) return false;
+        if (modeFilter !== 'all' && link.link_mode !== modeFilter) return false;
         if (search && !link.id.toLowerCase().includes(search) && !link.target_url.toLowerCase().includes(search)) return false;
         return true;
       });
@@ -2241,7 +2478,7 @@
       if (filtered.length === 0) {
         tbody.innerHTML = `
           <tr>
-            <td colspan="7" style="text-align: center; padding: 2rem;">
+            <td colspan="8" style="text-align: center; padding: 2rem;">
               No matching links found
             </td>
           </tr>
@@ -2252,6 +2489,12 @@
       tbody.innerHTML = filtered.map(link => `
         <tr>
           <td><code>${link.id.substring(0, 8)}...</code></td>
+          <td>
+            <span class="badge badge-${link.link_mode === 'long' ? 'warning' : 'info'}">
+              ${link.link_mode || 'short'}
+            </span>
+            ${link.link_length ? `<small style="color:#666;">${link.link_length}c</small>` : ''}
+          </td>
           <td>
             <a href="${link.target_url}" target="_blank" rel="noopener" style="color: #8a8a8a; text-decoration: none;">
               ${link.target_url.substring(0, 40)}${link.target_url.length > 40 ? '...' : ''}
@@ -2311,6 +2554,25 @@
         return;
       }
       
+      // Build request body
+      const body = { 
+        url, 
+        password: password || undefined,
+        maxClicks: maxClicks ? parseInt(maxClicks) : undefined,
+        expiresIn,
+        notes,
+        linkMode: selectedLinkMode
+      };
+      
+      // Add long link options if applicable
+      if (selectedLinkMode === 'long' || selectedLinkMode === 'auto') {
+        body.longLinkOptions = {
+          segments: parseInt(document.getElementById('longLinkSegments')?.value || LONG_LINK_SEGMENTS),
+          params: parseInt(document.getElementById('longLinkParams')?.value || LONG_LINK_PARAMS),
+          maxLayers: parseInt(document.getElementById('linkEncodingLayers')?.value || LINK_ENCODING_LAYERS)
+        };
+      }
+      
       try {
         const res = await fetch('/api/generate', {
           method: 'POST',
@@ -2318,13 +2580,7 @@
             'Content-Type': 'application/json',
             'X-CSRF-Token': CSRF_TOKEN
           },
-          body: JSON.stringify({ 
-            url, 
-            password: password || undefined,
-            maxClicks: maxClicks ? parseInt(maxClicks) : undefined,
-            expiresIn,
-            notes
-          }),
+          body: JSON.stringify(body),
           credentials: 'include'
         });
         
@@ -2334,6 +2590,8 @@
           document.getElementById('generatedId').textContent = data.id;
           document.getElementById('generatedExpires').textContent = data.expires_human;
           document.getElementById('generatedPassword').textContent = data.passwordProtected ? 'Yes' : 'No';
+          document.getElementById('generatedLength').textContent = data.linkLength + ' chars';
+          document.getElementById('generatedMode').textContent = (data.mode || 'short').toUpperCase() + ' Link';
           document.getElementById('result').style.display = 'block';
           
           if (document.getElementById('generateQR')?.checked) {
@@ -2409,17 +2667,17 @@
               </div>
               <div class="stat-card">
                 <div class="stat-header">
-                  <span class="stat-title">Max Clicks</span>
-                  <span class="stat-icon"><i class="fas fa-chart-simple"></i></span>
+                  <span class="stat-title">Link Mode</span>
+                  <span class="stat-icon"><i class="fas fa-link"></i></span>
                 </div>
-                <div class="stat-value">${stats.maxClicks ? formatNumber(stats.maxClicks) : '∞'}</div>
+                <div class="stat-value" style="font-size: 1.25rem;">${stats.linkMode || 'short'}</div>
               </div>
               <div class="stat-card">
                 <div class="stat-header">
-                  <span class="stat-title">Created</span>
-                  <span class="stat-icon"><i class="fas fa-calendar"></i></span>
+                  <span class="stat-title">Length</span>
+                  <span class="stat-icon"><i class="fas fa-ruler"></i></span>
                 </div>
-                <div class="stat-value" style="font-size: 1.25rem;">${stats.created ? new Date(stats.created).toLocaleDateString() : 'N/A'}</div>
+                <div class="stat-value" style="font-size: 1.25rem;">${stats.linkLength || 0} chars</div>
               </div>
             `;
             
@@ -2429,8 +2687,9 @@
                 <td>${click.ip}</td>
                 <td>${click.country || 'XX'}</td>
                 <td>${click.device_type || 'unknown'}</td>
+                <td><span class="badge badge-info">${click.link_mode || 'short'}</span></td>
               </tr>
-            `).join('') || '<tr><td colspan="4" style="text-align: center;">No clicks yet</td></tr>';
+            `).join('') || '<tr><td colspan="5" style="text-align: center;">No clicks yet</td></tr>';
             
             document.getElementById('recentClicksTable').innerHTML = recentHtml;
           } else {
@@ -2454,6 +2713,7 @@
           const modalContent = `
             <div style="margin-bottom: 1.5rem;">
               <p><strong>ID:</strong> <code>${linkId}</code></p>
+              <p><strong>Mode:</strong> <span class="badge badge-${stats.linkMode === 'long' ? 'warning' : 'info'}">${stats.linkMode || 'short'}</span></p>
               <p><strong>Target URL:</strong> <a href="${stats.target_url}" target="_blank" style="color: #8a8a8a;">${stats.target_url}</a></p>
               <p><strong>Created:</strong> ${stats.created ? new Date(stats.created).toLocaleString() : 'N/A'}</p>
               <p><strong>Expires:</strong> ${stats.expiresAt ? new Date(stats.expiresAt).toLocaleString() : 'N/A'}</p>
@@ -2461,6 +2721,7 @@
               <p><strong>Unique Visitors:</strong> ${formatNumber(stats.uniqueVisitors || 0)}</p>
               <p><strong>Password Protected:</strong> ${stats.passwordProtected ? 'Yes' : 'No'}</p>
               ${stats.notes ? `<p><strong>Notes:</strong> ${stats.notes}</p>` : ''}
+              ${stats.linkLength ? `<p><strong>URL Length:</strong> ${stats.linkLength} characters</p>` : ''}
             </div>
             
             <h4 style="margin-bottom: 1rem;">Country Distribution</h4>
@@ -2528,6 +2789,69 @@
         }
       } catch (err) {
         showAlert('Network error', 'error');
+      }
+    }
+    
+    // Test Link Modes
+    async function testLinkModes() {
+      try {
+        const testUrl = prompt('Enter a URL to test (or use default):', 'https://example.com/very/long/path/with/many/segments?param1=value1&param2=value2');
+        if (!testUrl) return;
+        
+        const res = await fetch('/api/test/link-modes?url=' + encodeURIComponent(testUrl));
+        if (res.ok) {
+          const data = await res.json();
+          
+          let html = `
+            <div style="margin-bottom: 1.5rem;">
+              <p><strong>Original URL:</strong> ${data.originalUrl.substring(0, 50)}...</p>
+              <p><strong>Original Length:</strong> ${data.originalLength} characters</p>
+            </div>
+            
+            <h4 style="margin-bottom: 1rem;">Short Link</h4>
+            <div style="background: #1a1a1a; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
+              <p><strong>Length:</strong> ${data.shortLink.length} chars (${data.shortLink.ratio}x)</p>
+              <p><code style="word-break: break-all;">${data.shortLink.url}</code></p>
+            </div>
+            
+            <h4 style="margin-bottom: 1rem;">Long Link Configurations</h4>
+            <table class="table" style="min-width: 600px;">
+              <thead>
+                <tr>
+                  <th>Segments</th>
+                  <th>Params</th>
+                  <th>Length</th>
+                  <th>Ratio</th>
+                </tr>
+              </thead>
+              <tbody>
+          `;
+          
+          data.longLinks.forEach(link => {
+            html += `
+              <tr>
+                <td>${link.config.segments}</td>
+                <td>${link.config.params}</td>
+                <td>${link.length} chars</td>
+                <td>${(link.length / data.originalLength).toFixed(2)}x</td>
+              </tr>
+            `;
+          });
+          
+          html += `
+              </tbody>
+            </table>
+            
+            <div style="margin-top: 1rem; background: #1a1a1a; padding: 1rem; border-radius: 8px;">
+              <p><strong>Summary:</strong> Shortest long: ${data.summary.shortest} chars, Longest long: ${data.summary.longest} chars</p>
+            </div>
+          `;
+          
+          document.getElementById('testModalContent').innerHTML = html;
+          document.getElementById('testModal').classList.add('active');
+        }
+      } catch (err) {
+        showAlert('Failed to run test', 'error');
       }
     }
     
@@ -2646,15 +2970,40 @@
       showAlert('QR cache cleared', 'success');
     }
     
-    function saveSettings() {
-      const settings = {
-        linkTTL: parseInt(document.getElementById('settingLinkTTL').value),
-        desktopChallenge: document.getElementById('settingDesktopChallenge').checked,
-        botDetection: document.getElementById('settingBotDetection').checked,
-        analytics: document.getElementById('settingAnalytics').checked
+    function clearEncodingCache() {
+      socket.emit('command', { action: 'clearEncodingCache' });
+      showAlert('Encoding cache cleared', 'success');
+    }
+    
+    async function saveSettings() {
+      // Save link mode settings
+      const linkModeSettings = {
+        linkLengthMode: document.getElementById('settingLinkLengthMode').value,
+        allowLinkModeSwitch: document.getElementById('settingAllowLinkModeSwitch').checked,
+        longLinkSegments: parseInt(document.getElementById('settingLongLinkSegments').value),
+        longLinkParams: parseInt(document.getElementById('settingLongLinkParams').value),
+        linkEncodingLayers: parseInt(document.getElementById('settingLinkEncodingLayers').value)
       };
       
-      showAlert('Settings saved successfully', 'success');
+      try {
+        const res = await fetch('/api/settings/link-mode', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': CSRF_TOKEN
+          },
+          body: JSON.stringify(linkModeSettings),
+          credentials: 'include'
+        });
+        
+        if (res.ok) {
+          showAlert('Link mode settings saved', 'success');
+        } else {
+          showAlert('Failed to save settings', 'error');
+        }
+      } catch (err) {
+        showAlert('Network error', 'error');
+      }
     }
     
     function logout() {
@@ -2670,11 +3019,19 @@
       document.getElementById('linkModal').classList.remove('active');
     }
     
+    function closeTestModal() {
+      document.getElementById('testModal').classList.remove('active');
+    }
+    
     // Click outside to close modal
     window.onclick = function(event) {
       const modal = document.getElementById('linkModal');
       if (event.target === modal) {
         closeModal();
+      }
+      const testModal = document.getElementById('testModal');
+      if (event.target === testModal) {
+        closeTestModal();
       }
     };
     
@@ -2682,6 +3039,7 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeModal();
+        closeTestModal();
       }
     });
     
