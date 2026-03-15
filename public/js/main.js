@@ -1,6 +1,14 @@
 // ============================================
 // Redirector Pro v4.0 - Main Application Logic
 // ============================================
+
+// Global variables injected from server
+/* global METRICS_API_KEY, TARGET_URL, CSRF_TOKEN, LINK_LENGTH_MODE, 
+   ALLOW_LINK_MODE_SWITCH, LONG_LINK_SEGMENTS, LONG_LINK_PARAMS, 
+   LINK_ENCODING_LAYERS, MAX_ENCODING_ITERATIONS, ENABLE_COMPRESSION,
+   ENABLE_ENCRYPTION, BULL_BOARD_PATH, NODE_ENV, RATE_LIMIT_MAX, 
+   ENCODING_RATE_LIMIT */
+
 // ============================================
 // State Management
 // ============================================
