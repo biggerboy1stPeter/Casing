@@ -520,6 +520,22 @@ asyncHook.enable();
 const app = express();
 const server = http.createServer(app);
 
+// ─── Add server event listeners for debugging ───────────────────────────────
+server.on('listening', () => {
+  const addr = server.address();
+  console.log(`✅ SERVER LISTENING ON ${addr.address}:${addr.port}`);
+  console.log(`🔍 Process ID: ${process.pid}`);
+  console.log(`🔍 Environment PORT: ${process.env.PORT}`);
+});
+
+server.on('error', (err) => {
+  console.error('❌ Server error:', err);
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${CONFIG.PORT} is already in use`);
+    process.exit(1);
+  }
+});
+
 // ─── Circuit Breakers ──────────────────────────────────────────────────────
 const circuitBreakerOptions = {
   timeout: CONFIG.CIRCUIT_BREAKER_TIMEOUT,
@@ -7034,11 +7050,15 @@ async function startServer() {
       performBackup();
     }
     
-    server.listen(PORT, HOST, () => {
+    // Get port from environment or use default
+    const port = process.env.PORT || CONFIG.PORT || 10000;
+    const host = CONFIG.HOST || '0.0.0.0';
+    
+    server.listen(port, host, () => {
       console.log('\n' + '='.repeat(100));
       console.log(`  🚀 Redirector Pro v4.1.0 - Enterprise Edition - ULTIMATE`);
       console.log('='.repeat(100));
-      console.log(`  📡 Host: ${HOST}:${PORT}`);
+      console.log(`  📡 Host: ${host}:${port}`);
       console.log(`  🔑 Metrics Key: ${METRICS_API_KEY.substring(0, 8)}...`);
       console.log(`  ⏱️  Link TTL: ${formatDuration(LINK_TTL_SEC)}`);
       console.log(`  📊 Max Links: ${MAX_LINKS.toLocaleString()}`);
@@ -7054,18 +7074,18 @@ async function startServer() {
       console.log(`  🗄️  Transactions: ${txManager ? 'Enabled' : 'Disabled'}`);
       console.log(`  🛡️  Circuit Breakers: Enabled`);
       console.log(`  📈 Prometheus Metrics: ${CONFIG.METRICS_ENABLED ? 'Enabled' : 'Disabled'}`);
-      console.log(`  📚 API Docs: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/api-docs`);
-      console.log(`  📍 Admin UI: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/admin`);
+      console.log(`  📚 API Docs: http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/api-docs`);
+      console.log(`  📍 Admin UI: http://${host === '0.0.0.0' ? 'localhost' : host}:${port}/admin`);
       
       if (serverAdapter && CONFIG.BULL_BOARD_ENABLED) {
-        console.log(`  📊 Bull Board: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}${CONFIG.BULL_BOARD_PATH}`);
+        console.log(`  📊 Bull Board: http://${host === '0.0.0.0' ? 'localhost' : host}:${port}${CONFIG.BULL_BOARD_PATH}`);
       }
       
       console.log('='.repeat(100) + '\n');
       
       logger.info('Server started', {
-        port: PORT,
-        host: HOST,
+        port,
+        host,
         nodeEnv: NODE_ENV,
         version: '4.1.0',
         linkMode: LINK_LENGTH_MODE,
@@ -7083,8 +7103,8 @@ async function startServer() {
         t: Date.now(),
         type: 'startup',
         version: '4.1.0-ultimate',
-        port: PORT,
-        host: HOST,
+        port,
+        host,
         nodeEnv: NODE_ENV,
         features: {
           encryption: ENABLE_ENCRYPTION,
