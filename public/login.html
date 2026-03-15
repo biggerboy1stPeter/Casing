@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>Secure Access | Redirector Pro Enterprise v4.0</title>
+  <title>Secure Access | Redirector Pro Enterprise v4.1.0</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
   <meta name="theme-color" content="#000000">
@@ -9,6 +9,8 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
+  <meta name="description" content="Secure enterprise login for Redirector Pro">
+  <meta name="robots" content="noindex, nofollow">
   
   <!-- Font Awesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -188,6 +190,20 @@
       border: 1px solid rgba(59, 130, 246, 0.2);
     }
 
+    .alert-warning {
+      background: rgba(245, 158, 11, 0.1);
+      border-left: 4px solid #f59e0b;
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.2);
+    }
+
+    .alert-success {
+      background: rgba(16, 185, 129, 0.1);
+      border-left: 4px solid #10b981;
+      color: #6ee7b7;
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
     @keyframes shake {
       0%, 100% { transform: translateX(0); }
       10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
@@ -308,6 +324,62 @@
       color: #fff;
     }
 
+    /* Divider */
+    .divider {
+      margin: 1.5rem 0;
+      position: relative;
+      text-align: center;
+    }
+
+    .divider span {
+      background: #0a0a0a;
+      padding: 0 1rem;
+      color: #666;
+      position: relative;
+      z-index: 1;
+      font-size: 0.9rem;
+    }
+
+    .divider hr {
+      border: none;
+      border-top: 1px solid #222;
+      position: relative;
+      top: -10px;
+      z-index: 0;
+    }
+
+    /* Passkey Button */
+    .passkey-btn {
+      width: 100%;
+      padding: clamp(0.9rem, 2.5vh, 1.2rem);
+      background: linear-gradient(90deg, #2d2d2d 0%, #4a4a4a 50%, #2d2d2d 100%);
+      color: white;
+      font-size: clamp(0.95rem, 2vw, 1.1rem);
+      font-weight: 500;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: all 0.3s;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+      background-size: 200% 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .passkey-btn:hover {
+      background-position: 100% 0;
+      transform: translateY(-2px);
+      box-shadow: 0 12px 35px rgba(100,100,100,0.3);
+    }
+
+    .passkey-btn i {
+      font-size: 1.2rem;
+      color: #4ade80;
+    }
+
     /* Form Options */
     .form-options {
       display: flex;
@@ -336,6 +408,15 @@
       cursor: pointer;
     }
 
+    .trust-device {
+      margin-top: 0.5rem;
+    }
+
+    .trust-device .remember-me {
+      color: #666;
+      font-size: 0.85rem;
+    }
+
     .forgot-link {
       color: #888;
       text-decoration: none;
@@ -350,6 +431,11 @@
 
     .forgot-link:hover {
       color: #b0b0b0;
+    }
+
+    .backup-code-link {
+      text-align: right;
+      margin-top: 5px;
     }
 
     /* Submit Button */
@@ -413,6 +499,11 @@
       display: none;
     }
 
+    .submit-btn.mfa-setup-btn {
+      background: linear-gradient(90deg, #3b82f6, #2563eb);
+      margin-top: 1rem;
+    }
+
     /* Loading State */
     .loading-spinner {
       display: inline-block;
@@ -446,6 +537,100 @@
       color: #f59e0b;
     }
 
+    /* Session Info */
+    .session-info {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      font-size: 0.8rem;
+      display: flex;
+      justify-content: space-between;
+      color: #888;
+    }
+
+    .session-info i {
+      margin-right: 0.3rem;
+      color: #666;
+    }
+
+    /* MFA Setup Card */
+    .mfa-setup {
+      margin-top: 1.5rem;
+      padding: 1.25rem;
+      background: linear-gradient(135deg, #1a1a1a, #111);
+      border-radius: 16px;
+      border-left: 4px solid #3b82f6;
+      animation: slideUp 0.5s ease;
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .mfa-setup h3 {
+      color: #fff;
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .mfa-setup h3 i {
+      color: #3b82f6;
+    }
+
+    .mfa-setup p {
+      color: #aaa;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+
+    .mfa-setup-actions {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .mfa-setup-actions .btn-small {
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+    }
+
+    .btn-primary {
+      background: #3b82f6;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #2563eb;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: #888;
+      border: 1px solid #333;
+    }
+
+    .btn-secondary:hover {
+      border-color: #666;
+      color: #aaa;
+    }
+
     /* Footer */
     .login-footer {
       margin-top: clamp(1.5rem, 4vh, 2.5rem);
@@ -467,6 +652,12 @@
       gap: 0.3rem;
       font-size: clamp(0.65rem, 1.2vw, 0.75rem);
       color: #666;
+      transition: color 0.2s;
+      cursor: help;
+    }
+
+    .badge-item:hover {
+      color: #888;
     }
 
     .badge-item i {
@@ -484,6 +675,24 @@
       font-weight: 600;
     }
 
+    .security-flags {
+      font-size: 0.7rem;
+      margin-top: 4px;
+      color: #555;
+      display: flex;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    .security-flags i {
+      cursor: help;
+      transition: color 0.2s;
+    }
+
+    .security-flags i:hover {
+      color: #888;
+    }
+
     /* Attempt Counter */
     .attempt-counter {
       display: inline-block;
@@ -493,6 +702,21 @@
       color: #aaa;
       font-weight: 600;
       transition: all 0.2s;
+    }
+
+    /* Helper text */
+    .helper-text {
+      font-size: 0.75rem;
+      color: #666;
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .helper-text i {
+      font-size: 0.7rem;
+      color: #888;
     }
 
     /* ============================================ */
@@ -563,6 +787,14 @@
       .subtitle {
         margin-bottom: 1.8rem;
       }
+
+      .mfa-setup-actions {
+        flex-direction: column;
+      }
+
+      .mfa-setup-actions .btn-small {
+        width: 100%;
+      }
     }
 
     /* Small Phones (375px - 575px) */
@@ -596,6 +828,10 @@
       .security-badge {
         flex-direction: column;
         gap: 0.4rem;
+      }
+
+      .security-flags {
+        flex-wrap: wrap;
       }
     }
 
@@ -706,6 +942,11 @@
       .login-footer {
         margin-top: 1rem;
       }
+
+      .mfa-setup {
+        margin-top: 0.5rem;
+        padding: 0.75rem;
+      }
     }
 
     /* 4K and Ultra-wide screens */
@@ -755,7 +996,9 @@
       .submit-btn, 
       .password-toggle,
       .forgot-link,
-      .remember-me {
+      .remember-me,
+      .passkey-btn,
+      .btn-small {
         min-height: 48px;
       }
       
@@ -778,13 +1021,18 @@
       .alert {
         border-width: 2px;
       }
+      
+      .badge-item i {
+        color: #fff;
+      }
     }
 
     /* Reduced Motion */
     @media (prefers-reduced-motion: reduce) {
       .login-wrapper,
       .submit-btn::before,
-      .loading-spinner {
+      .loading-spinner,
+      .mfa-setup {
         animation: none;
       }
     }
@@ -808,7 +1056,7 @@
       <div class="dots">•••</div>
 
       <h1>Welcome Back</h1>
-      <p class="subtitle">Secure access to your dashboard</p>
+      <p class="subtitle">Secure enterprise access</p>
 
       <!-- Info Banner (Shown when URL has parameters) -->
       <div class="info-banner" id="infoBanner">
@@ -818,6 +1066,9 @@
 
       <!-- CSRF Token - Will be injected by server -->
       <input type="hidden" id="csrfToken" value="{{csrfToken}}">
+
+      <!-- Device Fingerprint (Hidden) -->
+      <input type="hidden" id="deviceFingerprint" value="">
 
       <!-- Error Alert -->
       <div class="alert alert-error" id="errorAlert" style="display: none;">
@@ -839,6 +1090,40 @@
           <div class="alert-title">Too Many Attempts</div>
           <div class="alert-message" id="rateLimitMessage">Please wait before trying again</div>
         </div>
+      </div>
+
+      <!-- Warning Alert -->
+      <div class="alert alert-warning" id="warningAlert" style="display: none;">
+        <div class="alert-icon">
+          <i class="fas fa-exclamation-triangle"></i>
+        </div>
+        <div class="alert-content">
+          <div class="alert-title" id="warningTitle">Warning</div>
+          <div class="alert-message" id="warningMessage"></div>
+        </div>
+      </div>
+
+      <!-- Success Alert -->
+      <div class="alert alert-success" id="successAlert" style="display: none;">
+        <div class="alert-icon">
+          <i class="fas fa-check-circle"></i>
+        </div>
+        <div class="alert-content">
+          <div class="alert-title" id="successTitle">Success</div>
+          <div class="alert-message" id="successMessage"></div>
+        </div>
+      </div>
+
+      <!-- Passkey Button (WebAuthn) -->
+      <button type="button" class="passkey-btn" id="passkeyBtn" style="display: none;">
+        <i class="fas fa-fingerprint"></i>
+        <span>Sign in with Passkey</span>
+      </button>
+
+      <!-- Divider -->
+      <div class="divider" id="passkeyDivider" style="display: none;">
+        <hr>
+        <span>or</span>
       </div>
 
       <!-- Login Form -->
@@ -884,12 +1169,73 @@
           </div>
         </div>
 
+        <!-- MFA Field (Hidden by default) -->
+        <div class="form-group" id="mfaGroup" style="display: none;">
+          <label for="mfaCode">
+            <i class="fas fa-shield-alt"></i> Two-Factor Authentication Code
+          </label>
+          <div class="input-wrapper">
+            <i class="fas fa-key input-icon"></i>
+            <input 
+              type="text" 
+              id="mfaCode" 
+              name="mfaCode" 
+              placeholder="Enter 6-digit code" 
+              maxlength="6"
+              pattern="[0-9]{6}"
+              inputmode="numeric"
+              autocomplete="off"
+            >
+          </div>
+          <div class="helper-text">
+            <i class="fas fa-info-circle"></i>
+            <span>Enter the code from your authenticator app</span>
+          </div>
+        </div>
+
+        <!-- Backup Code Link (Hidden by default) -->
+        <div class="backup-code-link" id="backupCodeLink" style="display: none;">
+          <button type="button" class="forgot-link" onclick="showBackupCodeInput()">
+            <i class="fas fa-redo-alt"></i> Use backup code instead
+          </button>
+        </div>
+
+        <!-- Backup Code Input (Hidden by default) -->
+        <div class="form-group" id="backupCodeGroup" style="display: none;">
+          <label for="backupCode">
+            <i class="fas fa-ticket-alt"></i> Backup Recovery Code
+          </label>
+          <div class="input-wrapper">
+            <i class="fas fa-barcode input-icon"></i>
+            <input 
+              type="text" 
+              id="backupCode" 
+              name="backupCode" 
+              placeholder="XXXX-XXXX-XXXX-XXXX" 
+              pattern="[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}"
+              autocomplete="off"
+            >
+          </div>
+          <div class="helper-text">
+            <i class="fas fa-info-circle"></i>
+            <span>Use one of your recovery codes (each code can only be used once)</span>
+          </div>
+        </div>
+
         <div class="form-options">
           <label class="remember-me">
             <input type="checkbox" id="rememberMe">
             <span>Remember me</span>
           </label>
           <button type="button" class="forgot-link" onclick="showHelp(event)">Need help?</button>
+        </div>
+
+        <!-- Trust Device Option (Hidden by default) -->
+        <div class="trust-device" id="trustDeviceOption" style="display: none;">
+          <label class="remember-me">
+            <input type="checkbox" id="trustDevice">
+            <span>Trust this device for 30 days</span>
+          </label>
         </div>
 
         <button type="submit" class="submit-btn" id="loginBtn">
@@ -904,25 +1250,60 @@
         <span id="rateLimitWarningMessage"></span>
       </div>
 
+      <!-- Session Info (Hidden by default) -->
+      <div class="session-info" id="sessionInfo" style="display: none;"></div>
+
+      <!-- MFA Setup Card (Hidden by default) -->
+      <div class="mfa-setup" id="mfaSetup" style="display: none;">
+        <h3>
+          <i class="fas fa-shield-alt"></i>
+          Enhance Your Security
+        </h3>
+        <p>Enable two-factor authentication to protect your account from unauthorized access.</p>
+        <div class="mfa-setup-actions">
+          <button type="button" class="btn-small btn-primary" onclick="setupMFA()">
+            <i class="fas fa-qrcode"></i> Setup 2FA Now
+          </button>
+          <button type="button" class="btn-small btn-secondary" onclick="dismissMFASetup()">
+            Remind me later
+          </button>
+        </div>
+      </div>
+
       <!-- Footer -->
       <div class="login-footer">
         <div class="security-badge">
-          <div class="badge-item">
+          <div class="badge-item" title="256-bit AES-GCM encryption">
             <i class="fas fa-lock"></i>
-            <span>256-bit SSL</span>
+            <span>256-bit AES</span>
           </div>
-          <div class="badge-item">
+          <div class="badge-item" title="Request signing enabled">
+            <i class="fas fa-signature"></i>
+            <span>Signed Requests</span>
+          </div>
+          <div class="badge-item" title="CSRF protection with double-submit cookie">
             <i class="fas fa-shield"></i>
             <span>CSRF Protected</span>
           </div>
-          <div class="badge-item">
+          <div class="badge-item" title="Session timeout: 24 hours">
             <i class="fas fa-clock"></i>
             <span>Session Timeout</span>
           </div>
+          <div class="badge-item" title="MFA available" id="mfaBadge" style="display: none;">
+            <i class="fas fa-shield-alt"></i>
+            <span>2FA Enabled</span>
+          </div>
         </div>
         <div class="version-info">
-          <span>Redirector Pro v4.0</span> • Enterprise Edition • 
+          <span>Redirector Pro v4.1.0</span> • Enterprise Edition • 
           <span class="attempt-counter" id="attemptCounter">5</span> attempts remaining
+        </div>
+        <div class="security-flags">
+          <i class="fas fa-shield-alt" title="MFA Available"></i>
+          <i class="fas fa-fingerprint" title="WebAuthn Support"></i>
+          <i class="fas fa-lock" title="FIPS 140-2 Compliant"></i>
+          <i class="fas fa-clock" title="Automatic Session Timeout"></i>
+          <i class="fas fa-history" title="Audit Logging Enabled"></i>
         </div>
       </div>
     </div>
@@ -933,36 +1314,63 @@
     const CSRF_TOKEN = '{{csrfToken}}';
     const ADMIN_USERNAME = '{{ADMIN_USERNAME}}';
     const MAX_LOGIN_ATTEMPTS = {{LOGIN_ATTEMPTS_MAX}} || 5;
-    const LOGIN_BLOCK_DURATION = {{LOGIN_BLOCK_DURATION}} || 300000; // 5 minutes in ms
+    const LOGIN_BLOCK_DURATION = {{LOGIN_BLOCK_DURATION}} || 300000;
     const VERSION = '{{version}}';
+    const MFA_ENABLED = {{MFA_ENABLED}} === 'true' || false;
+    const WEBAUTHN_ENABLED = {{WEBAUTHN_ENABLED}} === 'true' || false;
 
     // Configuration
     const MAX_ATTEMPTS = parseInt(MAX_LOGIN_ATTEMPTS) || 5;
-    const LOCKOUT_TIME = parseInt(LOGIN_BLOCK_DURATION) || 5 * 60 * 1000; // 5 minutes
+    const LOCKOUT_TIME = parseInt(LOGIN_BLOCK_DURATION) || 5 * 60 * 1000;
     const DEBUG_MODE = {{DEBUG}} === 'true' || false;
+    const SESSION_TIMEOUT = {{SESSION_TTL}} || 86400;
 
     // State
     let loginAttempts = 0;
     let lockoutUntil = null;
     let csrfToken = CSRF_TOKEN || '';
     let countdownInterval = null;
+    let mfaRequired = false;
+    let mfaSessionId = null;
+    let backupCodesAvailable = false;
+    let activityTimer = null;
+    let isActive = true;
 
     // DOM Elements
     const loginForm = document.getElementById('loginForm');
     const usernameInput = document.getElementById('username');
     const passwordInput = document.getElementById('password');
+    const mfaInput = document.getElementById('mfaCode');
+    const backupCodeInput = document.getElementById('backupCode');
     const loginBtn = document.getElementById('loginBtn');
+    const passkeyBtn = document.getElementById('passkeyBtn');
+    const passkeyDivider = document.getElementById('passkeyDivider');
     const errorAlert = document.getElementById('errorAlert');
     const errorMessage = document.getElementById('errorMessage');
     const rateLimitAlert = document.getElementById('rateLimitAlert');
     const rateLimitMessage = document.getElementById('rateLimitMessage');
     const rateLimitWarning = document.getElementById('rateLimitWarning');
     const rateLimitWarningMessage = document.getElementById('rateLimitWarningMessage');
+    const warningAlert = document.getElementById('warningAlert');
+    const warningTitle = document.getElementById('warningTitle');
+    const warningMessage = document.getElementById('warningMessage');
+    const successAlert = document.getElementById('successAlert');
+    const successTitle = document.getElementById('successTitle');
+    const successMessage = document.getElementById('successMessage');
     const attemptCounter = document.getElementById('attemptCounter');
     const togglePassword = document.getElementById('togglePassword');
     const rememberMe = document.getElementById('rememberMe');
+    const trustDevice = document.getElementById('trustDevice');
     const infoBanner = document.getElementById('infoBanner');
     const infoMessage = document.getElementById('infoMessage');
+    const mfaGroup = document.getElementById('mfaGroup');
+    const mfaBadge = document.getElementById('mfaBadge');
+    const backupCodeLink = document.getElementById('backupCodeLink');
+    const backupCodeGroup = document.getElementById('backupCodeGroup');
+    const trustDeviceOption = document.getElementById('trustDeviceOption');
+    const sessionInfo = document.getElementById('sessionInfo');
+    const mfaSetup = document.getElementById('mfaSetup');
+    const deviceFingerprint = document.getElementById('deviceFingerprint');
 
     // ============================================
     // IMMEDIATE URL CLEANUP
@@ -1001,7 +1409,7 @@
     // ============================================
     document.addEventListener('DOMContentLoaded', initialize);
 
-    function initialize() {
+    async function initialize() {
       const tokenElement = document.getElementById('csrfToken');
       if (tokenElement && tokenElement.value) {
         csrfToken = tokenElement.value;
@@ -1023,10 +1431,28 @@
       
       loadSavedCredentials();
       startAttemptTimer();
+      generateDeviceFingerprint();
       
       if (window.location.search || window.location.hash) {
         window.history.replaceState(null, null, window.location.pathname);
       }
+      
+      // Initialize WebAuthn if available
+      if (WEBAUTHN_ENABLED && window.PublicKeyCredential) {
+        initializeWebAuthn();
+      }
+      
+      // Check device trust status
+      await checkDeviceTrust();
+      
+      // Setup activity monitoring
+      setupActivityMonitoring();
+      
+      // Check if should show MFA setup
+      setTimeout(checkMFASetupPrompt, 2000);
+      
+      // Update session info periodically
+      setInterval(updateSessionInfo, 30000);
     }
 
     // Load saved credentials
@@ -1037,8 +1463,160 @@
           usernameInput.value = savedUsername;
           rememberMe.checked = true;
         }
+        
+        const mfaDismissed = localStorage.getItem('mfa_setup_dismissed');
+        if (mfaDismissed) {
+          const dismissedTime = parseInt(mfaDismissed);
+          const oneWeek = 7 * 24 * 60 * 60 * 1000;
+          if (Date.now() - dismissedTime < oneWeek) {
+            mfaSetup.style.display = 'none';
+          }
+        }
       } catch (err) {
-        if (DEBUG_MODE) console.error('Failed to load saved credentials:', err);
+        if (DEBUG_MODE) console.error('Failed to load saved data:', err);
+      }
+    }
+
+    // Generate device fingerprint
+    function generateDeviceFingerprint() {
+      const components = [
+        navigator.userAgent,
+        navigator.language,
+        screen.colorDepth,
+        screen.width + 'x' + screen.height,
+        new Date().getTimezoneOffset(),
+        navigator.hardwareConcurrency || 'unknown',
+        navigator.deviceMemory || 'unknown',
+        !!navigator.maxTouchPoints,
+        !!window.indexedDB,
+        !!window.localStorage,
+        !!window.sessionStorage
+      ];
+      
+      const fingerprint = components.join('|||');
+      const hash = btoa(fingerprint).substring(0, 32);
+      
+      deviceFingerprint.value = hash;
+      if (DEBUG_MODE) console.log('🔑 Device fingerprint generated');
+      return hash;
+    }
+
+    // Check device trust status
+    async function checkDeviceTrust() {
+      const fingerprint = deviceFingerprint.value;
+      
+      try {
+        const response = await fetch('/api/auth/device-status', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken
+          },
+          body: JSON.stringify({ fingerprint })
+        });
+        
+        const data = await response.json();
+        
+        if (data.requiresTrust) {
+          trustDeviceOption.style.display = 'block';
+        }
+        
+        if (data.requiresMFA) {
+          mfaRequired = true;
+          mfaGroup.style.display = 'block';
+          mfaBadge.style.display = 'flex';
+        }
+        
+        if (data.backupCodesAvailable) {
+          backupCodesAvailable = true;
+          backupCodeLink.style.display = 'block';
+        }
+        
+      } catch (err) {
+        if (DEBUG_MODE) console.error('Device check failed:', err);
+      }
+    }
+
+    // Check MFA setup prompt
+    function checkMFASetupPrompt() {
+      if (mfaRequired || !MFA_ENABLED) return;
+      
+      const dismissed = localStorage.getItem('mfa_setup_dismissed');
+      if (!dismissed) {
+        mfaSetup.style.display = 'block';
+        return;
+      }
+      
+      const dismissedTime = parseInt(dismissed);
+      const oneWeek = 7 * 24 * 60 * 60 * 1000;
+      
+      if (Date.now() - dismissedTime > oneWeek) {
+        mfaSetup.style.display = 'block';
+      }
+    }
+
+    // Setup WebAuthn
+    async function initializeWebAuthn() {
+      try {
+        const response = await fetch('/api/auth/webauthn/available', {
+          headers: { 'X-CSRF-Token': csrfToken }
+        });
+        const data = await response.json();
+        
+        if (data.available) {
+          passkeyBtn.style.display = 'flex';
+          passkeyDivider.style.display = 'block';
+          
+          passkeyBtn.addEventListener('click', handleWebAuthnLogin);
+        }
+      } catch (err) {
+        if (DEBUG_MODE) console.error('WebAuthn init failed:', err);
+      }
+    }
+
+    // Handle WebAuthn login
+    async function handleWebAuthnLogin() {
+      try {
+        disableForm();
+        
+        const response = await fetch('/api/auth/webauthn/assertion', {
+          headers: { 'X-CSRF-Token': csrfToken }
+        });
+        const options = await response.json();
+        
+        const assertion = await navigator.credentials.get({
+          publicKey: options
+        });
+        
+        const verification = await fetch('/api/auth/webauthn/verify', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrfToken
+          },
+          body: JSON.stringify({
+            assertion,
+            fingerprint: deviceFingerprint.value,
+            trustDevice: trustDevice?.checked || false
+          })
+        });
+        
+        const result = await verification.json();
+        
+        if (result.success) {
+          if (DEBUG_MODE) console.log('✅ WebAuthn login successful');
+          showSuccess('Authentication successful', 'Redirecting...');
+          setTimeout(() => {
+            window.location.href = '/admin';
+          }, 500);
+        } else {
+          showError(result.error || 'Passkey verification failed');
+          enableForm();
+        }
+      } catch (err) {
+        if (DEBUG_MODE) console.error('WebAuthn error:', err);
+        showError('Passkey authentication failed');
+        enableForm();
       }
     }
 
@@ -1056,8 +1634,7 @@
           if (now > lockoutUntil) {
             lockoutUntil = null;
             loginAttempts = 0;
-            rateLimitAlert.style.display = 'none';
-            rateLimitWarning.style.display = 'none';
+            hideAllAlerts();
             enableForm();
             updateAttemptDisplay();
           } else {
@@ -1095,7 +1672,7 @@
       icon.className = type === 'password' ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
     });
 
-    // Show error message
+    // Show functions
     function showError(message) {
       errorMessage.textContent = message;
       errorAlert.style.display = 'flex';
@@ -1103,6 +1680,34 @@
       setTimeout(() => {
         errorAlert.style.display = 'none';
       }, 5000);
+    }
+
+    function showWarning(title, message) {
+      warningTitle.textContent = title;
+      warningMessage.textContent = message;
+      warningAlert.style.display = 'flex';
+      
+      setTimeout(() => {
+        warningAlert.style.display = 'none';
+      }, 5000);
+    }
+
+    function showSuccess(title, message) {
+      successTitle.textContent = title;
+      successMessage.textContent = message;
+      successAlert.style.display = 'flex';
+      
+      setTimeout(() => {
+        successAlert.style.display = 'none';
+      }, 3000);
+    }
+
+    function hideAllAlerts() {
+      errorAlert.style.display = 'none';
+      rateLimitAlert.style.display = 'none';
+      rateLimitWarning.style.display = 'none';
+      warningAlert.style.display = 'none';
+      successAlert.style.display = 'none';
     }
 
     // Show rate limit message
@@ -1118,10 +1723,12 @@
       }
     }
 
-    // Disable form
+    // Disable/Enable form
     function disableForm(isLocked = false) {
       usernameInput.disabled = true;
       passwordInput.disabled = true;
+      if (mfaInput) mfaInput.disabled = true;
+      if (backupCodeInput) backupCodeInput.disabled = true;
       loginBtn.disabled = true;
       
       if (isLocked) {
@@ -1131,10 +1738,11 @@
       }
     }
 
-    // Enable form
     function enableForm() {
       usernameInput.disabled = false;
       passwordInput.disabled = false;
+      if (mfaInput) mfaInput.disabled = false;
+      if (backupCodeInput) backupCodeInput.disabled = false;
       loginBtn.disabled = false;
       loginBtn.innerHTML = '<span>Sign In</span><i class="fas fa-arrow-right"></i>';
       passwordInput.focus();
@@ -1148,9 +1756,68 @@
         '• Default username: admin\n' +
         '• Password was set during installation\n' +
         '• Check your .env file for ADMIN_PASSWORD_HASH\n' +
+        '• Two-factor authentication may be required\n' +
+        '• Passkey/FIDO2 sign-in is available on supported devices\n' +
         '• Contact your system administrator for assistance\n\n' +
-        `Version: ${VERSION || '4.0.0'}`
+        `Version: ${VERSION || '4.1.0'}`
       );
+    }
+
+    // Show backup code input
+    function showBackupCodeInput() {
+      mfaGroup.style.display = 'none';
+      backupCodeLink.style.display = 'none';
+      backupCodeGroup.style.display = 'block';
+    }
+
+    // MFA Setup functions
+    function setupMFA() {
+      window.location.href = '/admin/setup-mfa';
+    }
+
+    function dismissMFASetup() {
+      mfaSetup.style.display = 'none';
+      localStorage.setItem('mfa_setup_dismissed', Date.now().toString());
+    }
+
+    // Activity monitoring
+    function setupActivityMonitoring() {
+      resetActivityTimer();
+      
+      ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'].forEach(event => {
+        document.addEventListener(event, resetActivityTimer, { passive: true });
+      });
+    }
+
+    function resetActivityTimer() {
+      if (activityTimer) clearTimeout(activityTimer);
+      
+      if (!isActive) isActive = true;
+      
+      activityTimer = setTimeout(() => {
+        isActive = false;
+        showWarning('Inactivity Warning', 'Your session will expire due to inactivity');
+      }, 5 * 60 * 1000);
+    }
+
+    // Update session info
+    async function updateSessionInfo() {
+      try {
+        const response = await fetch('/api/auth/session-info', {
+          headers: { 'X-CSRF-Token': csrfToken }
+        });
+        const data = await response.json();
+        
+        if (data.authenticated) {
+          sessionInfo.style.display = 'flex';
+          sessionInfo.innerHTML = `
+            <span><i class="fas fa-user"></i> ${data.username}</span>
+            <span><i class="fas fa-clock"></i> Expires in ${data.expiresIn}</span>
+          `;
+        }
+      } catch (err) {
+        if (DEBUG_MODE) console.error('Failed to get session info:', err);
+      }
     }
 
     // Handle form submission
@@ -1174,6 +1841,8 @@
       
       const username = usernameInput.value.trim();
       const password = passwordInput.value;
+      const mfaCode = mfaInput?.value;
+      const backupCode = backupCodeInput?.value;
       
       if (!username) {
         showError('Please enter your username');
@@ -1184,6 +1853,12 @@
       if (!password) {
         showError('Please enter your password');
         passwordInput.focus();
+        return;
+      }
+      
+      if (mfaGroup.style.display === 'block' && !mfaCode && !backupCode) {
+        showError('Please enter your authentication code');
+        if (mfaInput) mfaInput.focus();
         return;
       }
       
@@ -1198,6 +1873,23 @@
       try {
         if (DEBUG_MODE) console.log('📤 Sending login request for user:', username);
         
+        const body = {
+          username: username,
+          password: password,
+          _csrf: csrfToken,
+          remember: rememberMe.checked,
+          fingerprint: deviceFingerprint.value,
+          trustDevice: trustDevice?.checked || false
+        };
+        
+        if (mfaCode) {
+          body.mfaCode = mfaCode;
+        }
+        
+        if (backupCode) {
+          body.backupCode = backupCode.replace(/-/g, '');
+        }
+        
         const response = await fetch('/admin/login', {
           method: 'POST',
           headers: {
@@ -1206,12 +1898,7 @@
             'X-Requested-With': 'XMLHttpRequest',
             'Accept': 'application/json'
           },
-          body: JSON.stringify({
-            username: username,
-            password: password,
-            _csrf: csrfToken,
-            remember: rememberMe.checked
-          }),
+          body: JSON.stringify(body),
           credentials: 'include'
         });
         
@@ -1238,7 +1925,25 @@
             if (DEBUG_MODE) console.error('Failed to save username:', err);
           }
           
-          window.location.href = '/admin';
+          showSuccess('Authentication successful', 'Redirecting to dashboard...');
+          
+          setTimeout(() => {
+            window.location.href = '/admin';
+          }, 500);
+        } else if (data.requiresMFA) {
+          mfaRequired = true;
+          mfaGroup.style.display = 'block';
+          mfaBadge.style.display = 'flex';
+          mfaSessionId = data.sessionId;
+          
+          if (data.backupCodesAvailable) {
+            backupCodeLink.style.display = 'block';
+          }
+          
+          showWarning('MFA Required', 'Please enter your two-factor authentication code');
+          enableForm();
+          if (mfaInput) mfaInput.focus();
+          
         } else {
           loginAttempts++;
           if (DEBUG_MODE) console.log(`❌ Login failed. Attempt ${loginAttempts}/${MAX_ATTEMPTS}`);
@@ -1265,6 +1970,8 @@
             loginForm.style.animation = 'shake 0.5s ease';
             
             passwordInput.value = '';
+            if (mfaInput) mfaInput.value = '';
+            if (backupCodeInput) backupCodeInput.value = '';
           }
         }
       } catch (err) {
@@ -1276,14 +1983,21 @@
 
     // Input validation
     usernameInput.addEventListener('input', () => {
-      errorAlert.style.display = 'none';
-      rateLimitWarning.style.display = 'none';
+      hideAllAlerts();
     });
     
     passwordInput.addEventListener('input', () => {
-      errorAlert.style.display = 'none';
-      rateLimitWarning.style.display = 'none';
+      hideAllAlerts();
     });
+    
+    if (mfaInput) {
+      mfaInput.addEventListener('input', () => {
+        if (mfaInput.value.length === 6) {
+          // Auto-submit when 6 digits entered
+          loginForm.dispatchEvent(new Event('submit'));
+        }
+      });
+    }
     
     usernameInput.addEventListener('invalid', (e) => {
       e.preventDefault();
@@ -1321,6 +2035,9 @@
       if (countdownInterval) {
         clearInterval(countdownInterval);
       }
+      if (activityTimer) {
+        clearTimeout(activityTimer);
+      }
     });
 
     // Monitor URL for changes
@@ -1351,7 +2068,6 @@
     // Handle orientation change
     window.addEventListener('orientationchange', () => {
       setTimeout(() => {
-        // Adjust any layout issues after orientation change
         document.body.style.height = window.innerHeight + 'px';
       }, 100);
     });
@@ -1359,10 +2075,30 @@
     // Handle resize events for mobile keyboard
     window.addEventListener('resize', () => {
       if (window.innerHeight < 500) {
-        // Keyboard is likely open on mobile
         document.querySelector('.form-side').style.overflowY = 'auto';
       }
     });
+
+    // Error message mapping
+    const errorMessages = {
+      'INVALID_CREDENTIALS': 'The username or password you entered is incorrect',
+      'ACCOUNT_LOCKED': 'Your account has been temporarily locked due to too many failed attempts',
+      'MFA_REQUIRED': 'Two-factor authentication code required',
+      'INVALID_MFA': 'The authentication code you entered is invalid',
+      'INVALID_BACKUP_CODE': 'The backup code you entered is invalid or has been used',
+      'BACKUP_CODE_USED': 'This backup code has already been used',
+      'SESSION_EXPIRED': 'Your session has expired. Please log in again',
+      'DEVICE_NOT_TRUSTED': 'This device is not recognized. Please verify your identity',
+      'IP_BLOCKED': 'Access from this IP address has been blocked',
+      'RATE_LIMIT': 'Too many login attempts. Please try again later',
+      'CSRF_ERROR': 'Security validation failed. Please refresh the page',
+      'MFA_SETUP_REQUIRED': 'Please set up two-factor authentication first',
+      'WEBAUTHN_ERROR': 'Passkey authentication failed. Please try again'
+    };
+
+    window.getErrorMessage = function(code) {
+      return errorMessages[code] || 'An error occurred. Please try again';
+    };
   </script>
 </body>
 </html>
