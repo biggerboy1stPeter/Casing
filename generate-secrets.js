@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Generate Secrets Script v3.0 - Enterprise Edition
+ * Generate Secrets Script v4.0 - Enterprise Edition
  * 
  * Enhanced with support for:
  * - Encryption key rotation
@@ -10,8 +10,21 @@
  * - Database transaction settings
  * - Bull queue authentication
  * - Multi-factor authentication
+ * - WebAuthn/FIDO2 passkeys
+ * - Device fingerprinting
+ * - Audit logging
+ * - Metrics collection
+ * - Transaction monitoring
  * - Backup codes generation
  * - Webhook signing secrets
+ * 
+ * Note: For full functionality, install optional dependencies:
+ *   npm install js-yaml openpgp ssh2
+ *   
+ * Required for:
+ *   - Ansible vars generation (js-yaml)
+ *   - PGP key generation (openpgp)
+ *   - SSH key generation (ssh2)
  * 
  * Usage:
  *   node generate-secrets.js                    # Interactive mode
@@ -30,6 +43,14 @@ const os = require('os');
 const { promisify } = require('util');
 const zlib = require('zlib');
 
+// Optional dependencies - try to load, but don't fail if not available
+let yaml;
+try {
+  yaml = require('js-yaml');
+} catch (err) {
+  // yaml is optional for Ansible output
+}
+
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
@@ -40,6 +61,10 @@ const ENV_EXAMPLE_FILE = path.join(process.cwd(), '.env.example');
 const ENV_LOCAL_FILE = path.join(process.cwd(), '.env.local');
 const ENV_PROD_FILE = path.join(process.cwd(), '.env.production');
 const ENV_DEV_FILE = path.join(process.cwd(), '.env.development');
+const ENV_STAGING_FILE = path.join(process.cwd(), '.env.staging');
+const ENV_TESTING_FILE = path.join(process.cwd(), '.env.testing');
+const ENV_DOCKER_FILE = path.join(process.cwd(), '.env.docker');
+const ENV_CI_FILE = path.join(process.cwd(), '.env.ci');
 const SECRETS_DIR = path.join(process.cwd(), 'secrets');
 const KEYS_DIR = path.join(process.cwd(), 'keys');
 const BACKUP_DIR = path.join(process.cwd(), 'backups', 'secrets');
@@ -64,7 +89,7 @@ function log(color, message) {
 
 function showHelp() {
   console.log(`
-${colors.bright}🔐 GENERATE SECRETS SCRIPT v3.0 - ENTERPRISE EDITION${colors.reset}
+${colors.bright}🔐 GENERATE SECRETS SCRIPT v4.0 - ENTERPRISE EDITION${colors.reset}
 
 ${colors.bright}Usage:${colors.reset}
   node generate-secrets.js [options] [password]
@@ -87,6 +112,8 @@ ${colors.bright}Feature Options:${colors.reset}
   --gcp             Generate Google Cloud Secret Manager format
   --azure           Generate Azure Key Vault format
   --hashicorp       Generate HashiCorp Vault format
+  --terraform       Generate Terraform variables file
+  --ansible         Generate Ansible variables file
 
 ${colors.bright}Security Options:${colors.reset}
   --rotate          Rotate existing secrets (generate new ones)
@@ -107,9 +134,12 @@ ${colors.bright}Environment:${colors.reset}
   --local           Write to .env.local instead of .env
   --dev             Write to .env.development
   --prod            Write to .env.production
+  --staging         Write to .env.staging
   --test            Write to .env.test
+  --ci              Write to .env.ci
+  --docker-env      Write to .env.docker
 
-${colors.bright}Advanced Features:${colors.reset}
+${colors.bright}Advanced Security Features:${colors.reset}
   --request-signing Generate request signing secrets
   --key-rotation    Configure encryption key rotation
   --api-versioning  Generate API versioning keys
@@ -119,6 +149,13 @@ ${colors.bright}Advanced Features:${colors.reset}
   --rate-limiting   Generate rate limiting configuration
   --circuit-breaker Generate circuit breaker settings
   --monitoring      Generate monitoring and alerting config
+  --webauthn        Configure WebAuthn/FIDO2 passkey authentication
+  --fingerprint     Configure device fingerprinting
+  --audit-log       Configure audit logging
+  --metrics         Configure metrics collection
+  --transactions    Configure transaction monitoring
+  --session         Configure session management
+  --backup-config   Configure backup encryption
 
 ${colors.bright}Examples:${colors.reset}
   node generate-secrets.js --write --basic
@@ -130,24 +167,33 @@ ${colors.bright}Examples:${colors.reset}
   node generate-secrets.js --aws --write
   node generate-secrets.js --kubernetes --write
   node generate-secrets.js --request-signing --key-rotation --write
+  node generate-secrets.js --webauthn --fingerprint --audit-log --write
 
 ${colors.bright}Generated Secrets:${colors.reset}
-  ┌─────────────────────┬─────────────────────────────────┐
-  │ Secret              │ Description                     │
-  ├─────────────────────┼─────────────────────────────────┤
-  │ SESSION_SECRET      │ Session encryption (32 bytes)   │
-  │ METRICS_API_KEY     │ Prometheus metrics access       │
-  │ ADMIN_PASSWORD_HASH │ Bcrypt hash of admin password   │
-  │ JWT_SECRET          │ JWT signing (64 bytes)          │
-  │ ENCRYPTION_KEY      │ AES-256 encryption key          │
-  │ API_KEY             │ API access key                  │
-  │ WEBHOOK_SECRET      │ Webhook signing                 │
-  │ CSRF_SECRET         │ CSRF protection                 │
-  │ OTP_SECRET          │ 2FA/MFA secret                  │
-  │ REQUEST_SIGNING_KEY │ Request signature verification  │
-  │ QUEUE_AUTH_TOKEN    │ Bull Queue authentication       │
-  │ BACKUP_CODES        │ Recovery codes (5)              │
-  └─────────────────────┴─────────────────────────────────┘
+  ┌─────────────────────────┬─────────────────────────────────┐
+  │ Secret                  │ Description                     │
+  ├─────────────────────────┼─────────────────────────────────┤
+  │ SESSION_SECRET          │ Session encryption (32 bytes)   │
+  │ METRICS_API_KEY         │ Prometheus metrics access       │
+  │ ADMIN_PASSWORD_HASH     │ Bcrypt hash of admin password   │
+  │ JWT_SECRET              │ JWT signing (64 bytes)          │
+  │ ENCRYPTION_KEY          │ AES-256 encryption key          │
+  │ API_KEY                 │ API access key                  │
+  │ WEBHOOK_SECRET          │ Webhook signing                 │
+  │ CSRF_SECRET             │ CSRF protection                 │
+  │ OTP_SECRET              │ 2FA/MFA secret                  │
+  │ REQUEST_SIGNING_KEY     │ Request signature verification  │
+  │ QUEUE_AUTH_TOKEN        │ Bull Queue authentication       │
+  │ BACKUP_CODES            │ Recovery codes (10)             │
+  │ WEBAUTHN_ID             │ WebAuthn relying party ID       │
+  │ MFA_ENCRYPTION_KEY      │ MFA data encryption             │
+  │ SESSION_ENCRYPTION_KEY  │ Session encryption              │
+  │ DEVICE_FINGERPRINT_KEY  │ Device fingerprinting           │
+  │ RATE_LIMITING_KEY       │ Rate limiting encryption        │
+  │ AUDIT_LOG_KEY           │ Audit log signing               │
+  │ METRICS_AGGREGATOR_KEY  │ Metrics aggregation             │
+  │ TRANSACTION_MONITOR_KEY │ Transaction monitoring          │
+  └─────────────────────────┴─────────────────────────────────┘
   `);
   process.exit(0);
 }
@@ -204,7 +250,7 @@ function generateSalt() {
   return crypto.randomBytes(16).toString('hex');
 }
 
-function generateBackupCodes(count = 5) {
+function generateBackupCodes(count = 10) {
   const codes = [];
   for (let i = 0; i < count; i++) {
     const code = crypto.randomBytes(6).toString('hex').toUpperCase().match(/.{4}/g).join('-');
@@ -276,6 +322,50 @@ function generateTLSConfig() {
     key: `-----BEGIN PRIVATE KEY-----\n${crypto.randomBytes(128).toString('base64')}\n-----END PRIVATE KEY-----`,
     ca: `-----BEGIN CERTIFICATE-----\n${crypto.randomBytes(256).toString('base64')}\n-----END CERTIFICATE-----`
   };
+}
+
+function generateWebAuthnID() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function generateWebAuthnChallenge() {
+  return crypto.randomBytes(32).toString('base64');
+}
+
+function generateMFAEncryptionKey() {
+  return crypto.randomBytes(32).toString('base64');
+}
+
+function generateBackupCodeSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function generateSessionEncryptionKey() {
+  return crypto.randomBytes(32).toString('base64');
+}
+
+function generateDeviceFingerprintKey() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function generateRateLimitingKey() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function generateAuditLogKey() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function generateMetricsAggregatorKey() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function generateTransactionMonitorKey() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function generateBackupEncryptionKey() {
+  return crypto.randomBytes(32).toString('base64');
 }
 
 // ============================================================================
@@ -439,8 +529,8 @@ function validateEnvFile(env) {
     errors.push('PORT must be a valid port number (1-65535)');
   }
   
-  if (env.NODE_ENV && !['development', 'production', 'test'].includes(env.NODE_ENV)) {
-    warnings.push('NODE_ENV should be development, production, or test');
+  if (env.NODE_ENV && !['development', 'production', 'test', 'staging'].includes(env.NODE_ENV)) {
+    warnings.push('NODE_ENV should be development, production, staging, or test');
   }
   
   if (env.TARGET_URL && !env.TARGET_URL.match(/^https?:\/\/.+/)) {
@@ -462,6 +552,47 @@ function validateEnvFile(env) {
   if (env.ENCRYPTION_KEY_ROTATION_INTERVAL && 
       !['daily', 'weekly', 'monthly', 'quarterly'].includes(env.ENCRYPTION_KEY_ROTATION_INTERVAL)) {
     warnings.push('ENCRYPTION_KEY_ROTATION_INTERVAL should be daily, weekly, monthly, or quarterly');
+  }
+  
+  // New validation rules
+  if (env.MFA_ENABLED === 'true' && !env.OTP_SECRET) {
+    errors.push('MFA enabled but OTP_SECRET is missing');
+  }
+  
+  if (env.MFA_ENABLED === 'true' && !env.BACKUP_CODES) {
+    warnings.push('MFA enabled but no backup codes generated');
+  }
+  
+  if (env.WEBAUTHN_ENABLED === 'true' && !env.WEBAUTHN_ID) {
+    errors.push('WebAuthn enabled but WEBAUTHN_ID is missing');
+  }
+  
+  if (env.RATE_LIMIT_REDIS_ENABLED === 'true' && !env.REDIS_URL) {
+    warnings.push('Redis rate limiting enabled but REDIS_URL not configured');
+  }
+  
+  if (env.BULL_BOARD_AUTH_ENABLED === 'true' && !env.BULL_BOARD_PASSWORD_HASH) {
+    warnings.push('Bull Board auth enabled but no password hash set');
+  }
+  
+  if (env.ENCRYPTION_KEY_ROTATION_DAYS && parseInt(env.ENCRYPTION_KEY_ROTATION_DAYS) < 7) {
+    warnings.push('Key rotation interval less than 7 days may cause performance issues');
+  }
+  
+  if (env.SESSION_TTL && parseInt(env.SESSION_TTL) > 604800) {
+    warnings.push('Session TTL exceeds 7 days, consider shorter duration for security');
+  }
+  
+  if (env.REQUEST_SIGNING_EXPIRY && parseInt(env.REQUEST_SIGNING_EXPIRY) > 3600000) {
+    warnings.push('Request signing expiry exceeds 1 hour, consider shorter duration');
+  }
+  
+  if (env.DB_POOL_MAX && parseInt(env.DB_POOL_MAX) > 50) {
+    warnings.push('Database pool max connections > 50 may overload PostgreSQL');
+  }
+  
+  if (env.LOG_LEVEL && !['error', 'warn', 'info', 'debug', 'trace'].includes(env.LOG_LEVEL)) {
+    warnings.push('Invalid LOG_LEVEL value');
   }
   
   return { errors, warnings };
@@ -529,23 +660,119 @@ function auditSecrets(env) {
     audit.recommendations.push('Generate a CSRF_SECRET for form protection');
   }
   
-  // Check for production settings
+  // Check for weak algorithms
+  if (env.ENCRYPTION_KEY && Buffer.from(env.ENCRYPTION_KEY, 'base64').length < 32) {
+    audit.checks.push({
+      name: 'Encryption Key Strength',
+      status: 'FAIL',
+      message: 'Encryption key should be 256-bit (32 bytes)'
+    });
+    audit.overall = 'FAIL';
+  }
+  
+  // Check for MFA configuration
+  if (env.MFA_ENABLED === 'true') {
+    if (!env.OTP_SECRET) {
+      audit.checks.push({
+        name: 'MFA Secret',
+        status: 'FAIL',
+        message: 'MFA enabled but no OTP secret configured'
+      });
+      audit.overall = 'FAIL';
+    }
+    
+    if (!env.BACKUP_CODES) {
+      audit.checks.push({
+        name: 'Backup Codes',
+        status: 'WARN',
+        message: 'MFA enabled but no backup codes generated'
+      });
+      audit.recommendations.push('Generate backup codes for account recovery');
+    }
+  }
+  
+  // Check for WebAuthn support
+  if (env.WEBAUTHN_ENABLED === 'true' && !env.WEBAUTHN_ID) {
+    audit.checks.push({
+      name: 'WebAuthn Configuration',
+      status: 'FAIL',
+      message: 'WebAuthn enabled but no relying party ID configured'
+    });
+    audit.overall = 'FAIL';
+  }
+  
+  // Check for production safeguards
   if (env.NODE_ENV === 'production') {
-    if (!env.REDIS_URL || !env.REDIS_URL.includes('rediss://')) {
+    if (!env.CSP_ENABLED || env.CSP_ENABLED !== 'true') {
+      audit.recommendations.push('Enable Content Security Policy (CSP) in production');
+    }
+    
+    if (!env.HSTS_ENABLED || env.HSTS_ENABLED !== 'true') {
+      audit.recommendations.push('Enable HTTP Strict Transport Security (HSTS)');
+    }
+    
+    if (!env.RATE_LIMIT_REDIS_ENABLED || env.RATE_LIMIT_REDIS_ENABLED !== 'true') {
+      audit.recommendations.push('Use Redis-backed rate limiting for distributed deployments');
+    }
+    
+    if (env.REDIS_URL && !env.REDIS_URL.startsWith('rediss://')) {
       audit.recommendations.push('Use Redis with TLS (rediss://) in production');
     }
     
     if (env.DATABASE_URL && !env.DATABASE_URL.includes('sslmode=require')) {
-      audit.recommendations.push('Add sslmode=require to DATABASE_URL for production');
+      audit.recommendations.push('Enforce SSL for database connections in production');
+    }
+  }
+  
+  // Check for monitoring
+  if (!env.METRICS_ENABLED || env.METRICS_ENABLED !== 'true') {
+    audit.recommendations.push('Enable metrics collection for observability');
+  }
+  
+  if (!env.AUDIT_LOG_ENABLED || env.AUDIT_LOG_ENABLED !== 'true') {
+    audit.recommendations.push('Enable audit logging for compliance');
+  }
+  
+  // Check for backup configuration
+  if (env.AUTO_BACKUP_ENABLED === 'true') {
+    if (!env.BACKUP_ENCRYPTION_ENABLED || env.BACKUP_ENCRYPTION_ENABLED !== 'true') {
+      audit.recommendations.push('Enable backup encryption for sensitive data');
     }
     
-    if (!env.CSP_ENABLED || env.CSP_ENABLED !== 'true') {
-      audit.recommendations.push('Enable CSP in production for better security');
+    if (!env.BACKUP_COMPRESSION_ENABLED || env.BACKUP_COMPRESSION_ENABLED !== 'true') {
+      audit.recommendations.push('Enable backup compression to save storage');
+    }
+  }
+  
+  // Check for queue security
+  if (env.QUEUE_ENABLED === 'true') {
+    if (!env.QUEUE_AUTH_TOKEN) {
+      audit.checks.push({
+        name: 'Queue Authentication',
+        status: 'FAIL',
+        message: 'Queue enabled but no authentication token set'
+      });
+      audit.overall = 'FAIL';
     }
     
-    if (!env.HSTS_ENABLED || env.HSTS_ENABLED !== 'true') {
-      audit.recommendations.push('Enable HSTS in production for HTTPS enforcement');
+    if (env.BULL_BOARD_ENABLED === 'true' && env.BULL_BOARD_AUTH_ENABLED === 'true' && !env.BULL_BOARD_PASSWORD_HASH) {
+      audit.checks.push({
+        name: 'Bull Board Security',
+        status: 'FAIL',
+        message: 'Bull Board auth enabled but no password hash set'
+      });
+      audit.overall = 'FAIL';
     }
+  }
+  
+  // Check for request signing
+  if (env.REQUEST_SIGNING_KEY && env.REQUEST_SIGNING_KEY.length < 32) {
+    audit.checks.push({
+      name: 'Request Signing Key',
+      status: 'FAIL',
+      message: 'Request signing key should be at least 32 characters'
+    });
+    audit.overall = 'FAIL';
   }
   
   return audit;
@@ -575,6 +802,43 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
       'CSRF_SECRET',
       'CSRF_ENABLED'
     ],
+    'WEB AUTHN / FIDO2': [
+      'WEBAUTHN_ENABLED',
+      'WEBAUTHN_ID',
+      'WEBAUTHN_CHALLENGE',
+      'WEBAUTHN_RP_NAME',
+      'WEBAUTHN_RP_ID',
+      'WEBAUTHN_ORIGIN',
+      'WEBAUTHN_TIMEOUT',
+      'WEBAUTHN_ATTESTATION'
+    ],
+    'MFA / 2FA CONFIGURATION': [
+      'MFA_ENABLED',
+      'OTP_SECRET',
+      'BACKUP_CODES',
+      'MFA_ENCRYPTION_KEY',
+      'BACKUP_CODE_SALT',
+      'MFA_ISSUER',
+      'MFA_WINDOW',
+      'MFA_DISALLOW_REUSE'
+    ],
+    'SESSION MANAGEMENT': [
+      'SESSION_SECRET',
+      'SESSION_TTL',
+      'SESSION_ABSOLUTE_TIMEOUT',
+      'SESSION_ENCRYPTION_KEY',
+      'SESSION_ROTATION_INTERVAL',
+      'SESSION_COOKIE_NAME',
+      'SESSION_COOKIE_DOMAIN',
+      'SESSION_COOKIE_SECURE',
+      'SESSION_COOKIE_SAME_SITE'
+    ],
+    'DEVICE FINGERPRINTING': [
+      'DEVICE_FINGERPRINT_KEY',
+      'DEVICE_TRUST_TTL',
+      'DEVICE_MAX_TRUSTED',
+      'DEVICE_FINGERPRINT_HEADERS'
+    ],
     'ENCRYPTION KEY ROTATION': [
       'ENABLE_ENCRYPTION',
       'ENCRYPTION_KEY_ROTATION_DAYS',
@@ -591,6 +855,39 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
       'DB_AUDIT_LOGS',
       'DB_CONNECTION_TIMEOUT',
       'DB_STATEMENT_TIMEOUT'
+    ],
+    'RATE LIMITING ADVANCED': [
+      'RATE_LIMIT_REDIS_ENABLED',
+      'RATE_LIMIT_KEY_PREFIX',
+      'RATE_LIMIT_SKIP_SUCCESSFUL',
+      'RATE_LIMIT_WHITELIST',
+      'RATE_LIMIT_BLACKLIST',
+      'RATE_LIMIT_HEADERS'
+    ],
+    'AUDIT LOGGING': [
+      'AUDIT_LOG_ENABLED',
+      'AUDIT_LOG_KEY',
+      'AUDIT_LOG_RETENTION_DAYS',
+      'AUDIT_LOG_VERBOSE',
+      'AUDIT_LOG_EXCLUDE',
+      'AUDIT_WEBHOOK_URL',
+      'AUDIT_WEBHOOK_SECRET'
+    ],
+    'METRICS & OBSERVABILITY': [
+      'METRICS_ENABLED',
+      'METRICS_PREFIX',
+      'METRICS_AGGREGATOR_KEY',
+      'METRICS_PUSH_GATEWAY',
+      'METRICS_SCRAPE_INTERVAL',
+      'METRICS_HISTOGRAM_BUCKETS',
+      'METRICS_DEFAULT_LABELS'
+    ],
+    'TRANSACTION MONITORING': [
+      'TRANSACTION_MONITOR_KEY',
+      'TRANSACTION_SAMPLING_RATE',
+      'TRANSACTION_SLOW_THRESHOLD',
+      'TRANSACTION_DEADLOCK_RETRY',
+      'TRANSACTION_ISOLATION_LEVEL'
     ],
     'SERVER CONFIGURATION': [
       'PORT',
@@ -736,7 +1033,12 @@ function writeEnvFile(env, filePath = ENV_FILE, force = false) {
       'AUTO_BACKUP_INTERVAL',
       'BACKUP_RETENTION_DAYS',
       'BACKUP_ENCRYPTION_ENABLED',
-      'BACKUP_COMPRESSION_ENABLED'
+      'BACKUP_COMPRESSION_ENABLED',
+      'BACKUP_ENCRYPTION_KEY',
+      'BACKUP_S3_BUCKET',
+      'BACKUP_S3_REGION',
+      'BACKUP_S3_ACCESS_KEY',
+      'BACKUP_S3_SECRET_KEY'
     ],
     'WEBHOOKS': [
       'WEBHOOK_URL',
@@ -840,6 +1142,36 @@ DEFAULT_API_VERSION=v1
 SUPPORTED_API_VERSIONS=v1,v2
 CSRF_ENABLED=true
 
+# ─── WEB AUTHN / FIDO2 ───────────────────────────────────────────────────
+WEBAUTHN_ENABLED=false
+WEBAUTHN_ID=your-webauthn-id
+WEBAUTHN_CHALLENGE=your-challenge
+WEBAUTHN_RP_NAME=Redirector Pro
+WEBAUTHN_RP_ID=localhost
+WEBAUTHN_ORIGIN=https://localhost:10000
+WEBAUTHN_TIMEOUT=60000
+WEBAUTHN_ATTESTATION=none
+
+# ─── MFA / 2FA CONFIGURATION ─────────────────────────────────────────────
+MFA_ENABLED=false
+MFA_ENCRYPTION_KEY=your-mfa-encryption-key
+BACKUP_CODE_SALT=your-backup-code-salt
+MFA_ISSUER=Redirector Pro
+MFA_WINDOW=1
+MFA_DISALLOW_REUSE=true
+
+# ─── SESSION MANAGEMENT ───────────────────────────────────────────────────
+SESSION_ENCRYPTION_KEY=your-session-encryption-key
+SESSION_ROTATION_INTERVAL=3600
+SESSION_COOKIE_NAME=redirector.sid
+SESSION_COOKIE_SECURE=true
+SESSION_COOKIE_SAME_SITE=lax
+
+# ─── DEVICE FINGERPRINTING ───────────────────────────────────────────────
+DEVICE_FINGERPRINT_KEY=your-fingerprint-key
+DEVICE_TRUST_TTL=30
+DEVICE_MAX_TRUSTED=10
+
 # ─── ENCRYPTION KEY ROTATION ──────────────────────────────────────────────
 ENABLE_ENCRYPTION=false
 ENCRYPTION_KEY_ROTATION_DAYS=7
@@ -855,6 +1187,30 @@ DB_ISOLATION_LEVEL=SERIALIZABLE
 DB_TRANSACTION_MONITORING=true
 DB_AUDIT_LOGS=true
 DB_STATEMENT_TIMEOUT=10000
+
+# ─── RATE LIMITING ADVANCED ───────────────────────────────────────────────
+RATE_LIMIT_REDIS_ENABLED=false
+RATE_LIMIT_KEY_PREFIX=rl:
+RATE_LIMIT_SKIP_SUCCESSFUL=true
+
+# ─── AUDIT LOGGING ────────────────────────────────────────────────────────
+AUDIT_LOG_ENABLED=true
+AUDIT_LOG_KEY=your-audit-log-key
+AUDIT_LOG_RETENTION_DAYS=90
+AUDIT_LOG_VERBOSE=false
+AUDIT_WEBHOOK_SECRET=whsec_your-audit-webhook-secret
+
+# ─── METRICS & OBSERVABILITY ──────────────────────────────────────────────
+METRICS_AGGREGATOR_KEY=your-metrics-key
+METRICS_PUSH_GATEWAY=
+METRICS_SCRAPE_INTERVAL=15
+METRICS_HISTOGRAM_BUCKETS=0.1,5,15,50,100,200,300,400,500,1000,2000,5000
+
+# ─── TRANSACTION MONITORING ───────────────────────────────────────────────
+TRANSACTION_MONITOR_KEY=your-transaction-key
+TRANSACTION_SAMPLING_RATE=1.0
+TRANSACTION_SLOW_THRESHOLD=1000
+TRANSACTION_DEADLOCK_RETRY=3
 
 # ─── SERVER CONFIGURATION ─────────────────────────────────────────────────
 PORT=10000
@@ -956,7 +1312,6 @@ HSTS_ENABLED=true
 CORS_ENABLED=true
 LOGIN_ATTEMPTS_MAX=10
 LOGIN_BLOCK_DURATION=3600000
-MFA_ENABLED=false
 
 # ─── LOGGING ──────────────────────────────────────────────────────────────
 LOG_LEVEL=info
@@ -968,7 +1323,6 @@ LOG_MAX_SIZE=20m
 DEBUG=false
 METRICS_ENABLED=true
 METRICS_PREFIX=redirector_
-AUDIT_LOG_ENABLED=true
 
 # ─── CIRCUIT BREAKER ──────────────────────────────────────────────────────
 CIRCUIT_BREAKER_TIMEOUT=3000
@@ -1001,6 +1355,9 @@ AUTO_BACKUP_INTERVAL=86400000
 BACKUP_RETENTION_DAYS=7
 BACKUP_ENCRYPTION_ENABLED=true
 BACKUP_COMPRESSION_ENABLED=true
+BACKUP_ENCRYPTION_KEY=your-backup-encryption-key
+BACKUP_S3_BUCKET=your-backup-bucket
+BACKUP_S3_REGION=us-east-1
 
 # ─── WEBHOOKS ─────────────────────────────────────────────────────────────
 WEBHOOK_URL=https://api.example.com/webhook
@@ -1025,6 +1382,8 @@ CSP_ENABLED=false
 HSTS_ENABLED=false
 METRICS_ENABLED=false
 AUTO_BACKUP_ENABLED=false
+MFA_ENABLED=false
+WEBAUTHN_ENABLED=false
 `,
     [ENV_PROD_FILE]: `# Production environment
 NODE_ENV=production
@@ -1034,6 +1393,8 @@ CSP_ENABLED=true
 HSTS_ENABLED=true
 METRICS_ENABLED=true
 AUTO_BACKUP_ENABLED=true
+MFA_ENABLED=true
+WEBAUTHN_ENABLED=true
 `,
     [ENV_LOCAL_FILE]: `# Local overrides
 # Add local-only configuration here
@@ -1043,6 +1404,49 @@ AUTO_BACKUP_ENABLED=true
 # PORT=9000
 # DEBUG=true
 # LOG_LEVEL=debug
+`,
+    [ENV_STAGING_FILE]: `# Staging environment
+NODE_ENV=staging
+DEBUG=true
+LOG_LEVEL=debug
+CSP_ENABLED=true
+HSTS_ENABLED=false
+METRICS_ENABLED=true
+AUTO_BACKUP_ENABLED=true
+RATE_LIMIT_MAX_REQUESTS=200
+MFA_ENABLED=false
+WEBAUTHN_ENABLED=false
+`,
+    [ENV_TESTING_FILE]: `# Testing environment
+NODE_ENV=test
+DEBUG=true
+LOG_LEVEL=debug
+CSP_ENABLED=false
+HSTS_ENABLED=false
+METRICS_ENABLED=false
+AUTO_BACKUP_ENABLED=false
+RATE_LIMIT_MAX_REQUESTS=1000
+MFA_ENABLED=false
+WEBAUTHN_ENABLED=false
+`,
+    [ENV_DOCKER_FILE]: `# Docker environment
+NODE_ENV=production
+REDIS_HOST=redis
+REDIS_PORT=6379
+DB_HOST=postgres
+DB_PORT=5432
+REDIS_TLS_ENABLED=false
+DB_SSL_MODE=disable
+`,
+    [ENV_CI_FILE]: `# CI/CD environment
+NODE_ENV=test
+DEBUG=false
+LOG_LEVEL=error
+METRICS_ENABLED=false
+AUTO_BACKUP_ENABLED=false
+RATE_LIMIT_MAX_REQUESTS=10000
+MFA_ENABLED=false
+WEBAUTHN_ENABLED=false
 `
   };
   
@@ -1063,7 +1467,7 @@ function exportSecrets(filePath, env, encryptionKey = null) {
       user: os.userInfo().username,
       node: process.version,
       platform: `${os.platform()} ${os.release()}`,
-      version: '3.0'
+      version: '4.0'
     },
     secrets: {}
   };
@@ -1156,7 +1560,10 @@ function generateKubernetesSecrets(env, secrets) {
     'SESSION_SECRET', 'METRICS_API_KEY', 'JWT_SECRET', 'ENCRYPTION_KEY',
     'API_KEY', 'WEBHOOK_SECRET', 'CSRF_SECRET', 'OTP_SECRET',
     'REQUEST_SIGNING_KEY', 'QUEUE_AUTH_TOKEN', 'DB_PASSWORD', 'REDIS_PASSWORD',
-    'SMTP_PASS', 'IPINFO_TOKEN'
+    'SMTP_PASS', 'IPINFO_TOKEN', 'WEBAUTHN_ID', 'MFA_ENCRYPTION_KEY',
+    'SESSION_ENCRYPTION_KEY', 'DEVICE_FINGERPRINT_KEY', 'RATE_LIMITING_KEY',
+    'AUDIT_LOG_KEY', 'METRICS_AGGREGATOR_KEY', 'TRANSACTION_MONITOR_KEY',
+    'BACKUP_ENCRYPTION_KEY'
   ];
   
   secretKeys.forEach(key => {
@@ -1195,6 +1602,15 @@ function generateAWSSecrets(env, secrets) {
     'redirector-pro/db-password': env.DB_PASSWORD,
     'redirector-pro/redis-password': env.REDIS_PASSWORD,
     'redirector-pro/smtp-pass': env.SMTP_PASS,
+    'redirector-pro/webauthn-id': env.WEBAUTHN_ID,
+    'redirector-pro/mfa-key': env.MFA_ENCRYPTION_KEY,
+    'redirector-pro/session-key': env.SESSION_ENCRYPTION_KEY,
+    'redirector-pro/fingerprint-key': env.DEVICE_FINGERPRINT_KEY,
+    'redirector-pro/rate-limit-key': env.RATE_LIMITING_KEY,
+    'redirector-pro/audit-key': env.AUDIT_LOG_KEY,
+    'redirector-pro/metrics-key': env.METRICS_AGGREGATOR_KEY,
+    'redirector-pro/transaction-key': env.TRANSACTION_MONITOR_KEY,
+    'redirector-pro/backup-key': env.BACKUP_ENCRYPTION_KEY,
     'redirector-pro/admin-hash': secrets.passwordHash
   };
   
@@ -1202,6 +1618,208 @@ function generateAWSSecrets(env, secrets) {
   fs.writeFileSync(outputPath, JSON.stringify(awsSecrets, null, 2));
   log('green', `✅ AWS Secrets Manager format created: ${outputPath}`);
   log('yellow', '⚠️  Import using: aws secretsmanager create-secret --name <name> --secret-string file://aws-secrets.json');
+}
+
+function generateGCPSecrets(env, secrets) {
+  const gcpSecrets = {
+    SESSION_SECRET: env.SESSION_SECRET,
+    METRICS_API_KEY: env.METRICS_API_KEY,
+    JWT_SECRET: env.JWT_SECRET,
+    ENCRYPTION_KEY: env.ENCRYPTION_KEY,
+    API_KEY: env.API_KEY,
+    WEBHOOK_SECRET: env.WEBHOOK_SECRET,
+    CSRF_SECRET: env.CSRF_SECRET,
+    OTP_SECRET: env.OTP_SECRET,
+    REQUEST_SIGNING_KEY: env.REQUEST_SIGNING_KEY,
+    QUEUE_AUTH_TOKEN: env.QUEUE_AUTH_TOKEN,
+    DB_PASSWORD: env.DB_PASSWORD,
+    REDIS_PASSWORD: env.REDIS_PASSWORD,
+    SMTP_PASS: env.SMTP_PASS,
+    WEBAUTHN_ID: env.WEBAUTHN_ID,
+    MFA_ENCRYPTION_KEY: env.MFA_ENCRYPTION_KEY,
+    SESSION_ENCRYPTION_KEY: env.SESSION_ENCRYPTION_KEY,
+    DEVICE_FINGERPRINT_KEY: env.DEVICE_FINGERPRINT_KEY,
+    RATE_LIMITING_KEY: env.RATE_LIMITING_KEY,
+    AUDIT_LOG_KEY: env.AUDIT_LOG_KEY,
+    METRICS_AGGREGATOR_KEY: env.METRICS_AGGREGATOR_KEY,
+    TRANSACTION_MONITOR_KEY: env.TRANSACTION_MONITOR_KEY,
+    BACKUP_ENCRYPTION_KEY: env.BACKUP_ENCRYPTION_KEY,
+    ADMIN_PASSWORD_HASH: secrets.passwordHash
+  };
+  
+  const outputPath = path.join(process.cwd(), 'gcp-secrets.json');
+  fs.writeFileSync(outputPath, JSON.stringify(gcpSecrets, null, 2));
+  log('green', `✅ GCP Secret Manager format created: ${outputPath}`);
+  log('yellow', '⚠️  Import using: gcloud secrets create redirector-pro --data-file=gcp-secrets.json');
+}
+
+function generateAzureSecrets(env, secrets) {
+  const azureSecrets = [];
+  
+  const secretMap = {
+    'session-secret': env.SESSION_SECRET,
+    'metrics-key': env.METRICS_API_KEY,
+    'jwt-secret': env.JWT_SECRET,
+    'encryption-key': env.ENCRYPTION_KEY,
+    'api-key': env.API_KEY,
+    'webhook-secret': env.WEBHOOK_SECRET,
+    'csrf-secret': env.CSRF_SECRET,
+    'otp-secret': env.OTP_SECRET,
+    'signing-key': env.REQUEST_SIGNING_KEY,
+    'queue-token': env.QUEUE_AUTH_TOKEN,
+    'db-password': env.DB_PASSWORD,
+    'redis-password': env.REDIS_PASSWORD,
+    'smtp-password': env.SMTP_PASS,
+    'webauthn-id': env.WEBAUTHN_ID,
+    'mfa-key': env.MFA_ENCRYPTION_KEY,
+    'session-key': env.SESSION_ENCRYPTION_KEY,
+    'fingerprint-key': env.DEVICE_FINGERPRINT_KEY,
+    'rate-limit-key': env.RATE_LIMITING_KEY,
+    'audit-key': env.AUDIT_LOG_KEY,
+    'metrics-key': env.METRICS_AGGREGATOR_KEY,
+    'transaction-key': env.TRANSACTION_MONITOR_KEY,
+    'backup-key': env.BACKUP_ENCRYPTION_KEY,
+    'admin-hash': secrets.passwordHash
+  };
+  
+  Object.entries(secretMap).forEach(([name, value]) => {
+    if (value) {
+      azureSecrets.push({
+        name: `redirector-pro-${name}`,
+        value: value,
+        contentType: 'text/plain',
+        enabled: true,
+        tags: {
+          environment: env.NODE_ENV || 'production',
+          version: '4.1.0',
+          generated: new Date().toISOString()
+        }
+      });
+    }
+  });
+  
+  const outputPath = path.join(process.cwd(), 'azure-secrets.json');
+  fs.writeFileSync(outputPath, JSON.stringify(azureSecrets, null, 2));
+  log('green', `✅ Azure Key Vault format created: ${outputPath}`);
+  log('yellow', '⚠️  Import using: az keyvault secret set --vault-name your-vault --name <name> --value <value>');
+}
+
+function generateTerraformVars(env, secrets) {
+  const tfVars = {
+    session_secret: env.SESSION_SECRET,
+    metrics_api_key: env.METRICS_API_KEY,
+    admin_password_hash: secrets.passwordHash,
+    admin_username: env.ADMIN_USERNAME || 'admin',
+    jwt_secret: env.JWT_SECRET,
+    encryption_key: env.ENCRYPTION_KEY,
+    api_key: env.API_KEY,
+    webhook_secret: env.WEBHOOK_SECRET,
+    csrf_secret: env.CSRF_SECRET,
+    otp_secret: env.OTP_SECRET,
+    backup_codes: secrets.backupCodes,
+    request_signing_key: env.REQUEST_SIGNING_KEY,
+    queue_auth_token: env.QUEUE_AUTH_TOKEN,
+    db_password: env.DB_PASSWORD,
+    redis_password: env.REDIS_PASSWORD,
+    smtp_pass: env.SMTP_PASS,
+    webauthn_id: env.WEBAUTHN_ID,
+    mfa_encryption_key: env.MFA_ENCRYPTION_KEY,
+    session_encryption_key: env.SESSION_ENCRYPTION_KEY,
+    device_fingerprint_key: env.DEVICE_FINGERPRINT_KEY,
+    rate_limiting_key: env.RATE_LIMITING_KEY,
+    audit_log_key: env.AUDIT_LOG_KEY,
+    metrics_aggregator_key: env.METRICS_AGGREGATOR_KEY,
+    transaction_monitor_key: env.TRANSACTION_MONITOR_KEY,
+    backup_encryption_key: env.BACKUP_ENCRYPTION_KEY
+  };
+  
+  const outputPath = path.join(process.cwd(), 'terraform.tfvars.json');
+  fs.writeFileSync(outputPath, JSON.stringify(tfVars, null, 2));
+  log('green', `✅ Terraform variables file created: ${outputPath}`);
+}
+
+function generateAnsibleVars(env, secrets) {
+  if (!yaml) {
+    log('yellow', '⚠️ js-yaml not installed. Skipping Ansible vars generation.');
+    log('yellow', '   Install with: npm install js-yaml');
+    return;
+  }
+  
+  const ansibleVars = {
+    redirector_pro: {
+      session_secret: env.SESSION_SECRET,
+      metrics_api_key: env.METRICS_API_KEY,
+      admin_password_hash: secrets.passwordHash,
+      admin_username: env.ADMIN_USERNAME || 'admin',
+      jwt_secret: env.JWT_SECRET,
+      encryption_key: env.ENCRYPTION_KEY,
+      api_key: env.API_KEY,
+      webhook_secret: env.WEBHOOK_SECRET,
+      csrf_secret: env.CSRF_SECRET,
+      otp_secret: env.OTP_SECRET,
+      backup_codes: secrets.backupCodes,
+      request_signing_key: env.REQUEST_SIGNING_KEY,
+      queue_auth_token: env.QUEUE_AUTH_TOKEN,
+      database: {
+        password: env.DB_PASSWORD,
+        encryption_key: env.DB_ENCRYPTION_KEY
+      },
+      redis: {
+        password: env.REDIS_PASSWORD
+      },
+      email: {
+        password: env.SMTP_PASS
+      },
+      webauthn: {
+        id: env.WEBAUTHN_ID,
+        challenge: env.WEBAUTHN_CHALLENGE,
+        rp_name: env.WEBAUTHN_RP_NAME,
+        rp_id: env.WEBAUTHN_RP_ID,
+        origin: env.WEBAUTHN_ORIGIN
+      },
+      mfa: {
+        encryption_key: env.MFA_ENCRYPTION_KEY,
+        backup_code_salt: env.BACKUP_CODE_SALT,
+        issuer: env.MFA_ISSUER
+      },
+      session: {
+        encryption_key: env.SESSION_ENCRYPTION_KEY,
+        ttl: env.SESSION_TTL,
+        cookie_name: env.SESSION_COOKIE_NAME
+      },
+      device_fingerprint: {
+        key: env.DEVICE_FINGERPRINT_KEY,
+        trust_ttl: env.DEVICE_TRUST_TTL
+      },
+      rate_limiting: {
+        key: env.RATE_LIMITING_KEY,
+        redis_enabled: env.RATE_LIMIT_REDIS_ENABLED
+      },
+      audit_log: {
+        key: env.AUDIT_LOG_KEY,
+        retention_days: env.AUDIT_LOG_RETENTION_DAYS,
+        webhook_secret: env.AUDIT_WEBHOOK_SECRET
+      },
+      metrics: {
+        aggregator_key: env.METRICS_AGGREGATOR_KEY,
+        prefix: env.METRICS_PREFIX
+      },
+      transaction_monitor: {
+        key: env.TRANSACTION_MONITOR_KEY,
+        sampling_rate: env.TRANSACTION_SAMPLING_RATE,
+        slow_threshold: env.TRANSACTION_SLOW_THRESHOLD
+      },
+      backup: {
+        encryption_key: env.BACKUP_ENCRYPTION_KEY,
+        s3_bucket: env.BACKUP_S3_BUCKET,
+        s3_region: env.BACKUP_S3_REGION
+      }
+    }
+  };
+  
+  const outputPath = path.join(process.cwd(), 'ansible-vars.yml');
+  fs.writeFileSync(outputPath, yaml.dump(ansibleVars));
+  log('green', `✅ Ansible variables file created: ${outputPath}`);
 }
 
 function generateDockerSecrets(env, secrets) {
@@ -1224,6 +1842,15 @@ function generateDockerSecrets(env, secrets) {
     'db_password': env.DB_PASSWORD || '',
     'smtp_password': env.SMTP_PASS || '',
     'ipinfo_token': env.IPINFO_TOKEN || '',
+    'webauthn_id': env.WEBAUTHN_ID || '',
+    'mfa_key': env.MFA_ENCRYPTION_KEY || '',
+    'session_key': env.SESSION_ENCRYPTION_KEY || '',
+    'fingerprint_key': env.DEVICE_FINGERPRINT_KEY || '',
+    'rate_limit_key': env.RATE_LIMITING_KEY || '',
+    'audit_key': env.AUDIT_LOG_KEY || '',
+    'metrics_key': env.METRICS_AGGREGATOR_KEY || '',
+    'transaction_key': env.TRANSACTION_MONITOR_KEY || '',
+    'backup_key': env.BACKUP_ENCRYPTION_KEY || '',
     'admin_password_hash': secrets.passwordHash
   };
   
@@ -1275,6 +1902,15 @@ function generateHashiCorpVaultFormat(env, secrets) {
       'queue': env.QUEUE_AUTH_TOKEN,
       'db-password': env.DB_PASSWORD,
       'redis-password': env.REDIS_PASSWORD,
+      'webauthn-id': env.WEBAUTHN_ID,
+      'mfa-key': env.MFA_ENCRYPTION_KEY,
+      'session-key': env.SESSION_ENCRYPTION_KEY,
+      'fingerprint-key': env.DEVICE_FINGERPRINT_KEY,
+      'rate-limit-key': env.RATE_LIMITING_KEY,
+      'audit-key': env.AUDIT_LOG_KEY,
+      'metrics-key': env.METRICS_AGGREGATOR_KEY,
+      'transaction-key': env.TRANSACTION_MONITOR_KEY,
+      'backup-key': env.BACKUP_ENCRYPTION_KEY,
       'admin-hash': secrets.passwordHash
     }
   };
@@ -1474,6 +2110,264 @@ async function promptForDatabaseTransactions() {
   return env;
 }
 
+async function promptForWebAuthn() {
+  log('cyan', '\n🔑 Configuring WebAuthn/FIDO2 (optional)...');
+  const env = {};
+  
+  env.WEBAUTHN_ENABLED = await promptForVar('Enable WebAuthn/FIDO2?', 'false');
+  
+  if (env.WEBAUTHN_ENABLED === 'true') {
+    env.WEBAUTHN_ID = generateWebAuthnID();
+    env.WEBAUTHN_CHALLENGE = generateWebAuthnChallenge();
+    env.WEBAUTHN_RP_NAME = await promptForVar('Relying Party Name', 'Redirector Pro');
+    env.WEBAUTHN_RP_ID = await promptForVar('Relying Party ID', 'localhost');
+    env.WEBAUTHN_ORIGIN = await promptForVar('Origin', 'https://localhost:10000');
+    env.WEBAUTHN_TIMEOUT = await promptForVar('Timeout (ms)', '60000');
+    env.WEBAUTHN_ATTESTATION = await promptForVar('Attestation (none/indirect/direct)', 'none');
+    
+    log('green', `✅ Generated WebAuthn ID: ${env.WEBAUTHN_ID}`);
+  }
+  
+  return env;
+}
+
+async function promptForMFA() {
+  log('cyan', '\n🔐 Configuring MFA/2FA...');
+  const env = {};
+  
+  env.MFA_ENABLED = await promptForVar('Enable MFA/2FA?', 'false');
+  
+  if (env.MFA_ENABLED === 'true') {
+    env.OTP_SECRET = generateOTPSecret();
+    env.MFA_ENCRYPTION_KEY = generateMFAEncryptionKey();
+    env.BACKUP_CODE_SALT = generateBackupCodeSalt();
+    env.BACKUP_CODES = generateBackupCodes(10).join(',');
+    env.MFA_ISSUER = await promptForVar('MFA Issuer', 'Redirector Pro');
+    env.MFA_WINDOW = await promptForVar('MFA window (steps)', '1');
+    env.MFA_DISALLOW_REUSE = await promptForVar('Disallow code reuse?', 'true');
+    
+    log('green', `✅ Generated OTP secret: ${env.OTP_SECRET}`);
+    log('green', `✅ Generated backup codes: ${env.BACKUP_CODES.substring(0, 20)}...`);
+  }
+  
+  return env;
+}
+
+async function promptForSession() {
+  log('cyan', '\n🕐 Configuring Session Management...');
+  const env = {};
+  
+  env.SESSION_SECRET = generateSessionSecret();
+  env.SESSION_ENCRYPTION_KEY = generateSessionEncryptionKey();
+  env.SESSION_TTL = await promptForVar('Session TTL (seconds)', '86400');
+  env.SESSION_ABSOLUTE_TIMEOUT = await promptForVar('Absolute timeout (seconds)', '604800');
+  env.SESSION_ROTATION_INTERVAL = await promptForVar('Rotation interval (seconds)', '3600');
+  env.SESSION_COOKIE_NAME = await promptForVar('Cookie name', 'redirector.sid');
+  env.SESSION_COOKIE_SECURE = await promptForVar('Secure cookie?', 'true');
+  env.SESSION_COOKIE_SAME_SITE = await promptForVar('SameSite policy', 'lax');
+  
+  return env;
+}
+
+async function promptForDeviceFingerprint() {
+  log('cyan', '\n🖥️ Configuring Device Fingerprinting...');
+  const env = {};
+  
+  env.DEVICE_FINGERPRINT_KEY = generateDeviceFingerprintKey();
+  env.DEVICE_TRUST_TTL = await promptForVar('Device trust TTL (days)', '30');
+  env.DEVICE_MAX_TRUSTED = await promptForVar('Max trusted devices per user', '10');
+  
+  log('green', `✅ Generated device fingerprint key: ${env.DEVICE_FINGERPRINT_KEY.substring(0, 8)}...`);
+  
+  return env;
+}
+
+async function promptForAuditLog() {
+  log('cyan', '\n📝 Configuring Audit Logging...');
+  const env = {};
+  
+  env.AUDIT_LOG_ENABLED = await promptForVar('Enable audit logging?', 'true');
+  
+  if (env.AUDIT_LOG_ENABLED === 'true') {
+    env.AUDIT_LOG_KEY = generateAuditLogKey();
+    env.AUDIT_LOG_RETENTION_DAYS = await promptForVar('Log retention (days)', '90');
+    env.AUDIT_LOG_VERBOSE = await promptForVar('Verbose logging?', 'false');
+    env.AUDIT_WEBHOOK_URL = await promptForVar('Audit webhook URL (optional)', '');
+    
+    if (env.AUDIT_WEBHOOK_URL) {
+      env.AUDIT_WEBHOOK_SECRET = generateWebhookSecret();
+      log('green', `✅ Generated audit webhook secret`);
+    }
+    
+    log('green', `✅ Generated audit log key: ${env.AUDIT_LOG_KEY.substring(0, 8)}...`);
+  }
+  
+  return env;
+}
+
+async function promptForMetrics() {
+  log('cyan', '\n📊 Configuring Metrics...');
+  const env = {};
+  
+  env.METRICS_ENABLED = await promptForVar('Enable metrics?', 'true');
+  
+  if (env.METRICS_ENABLED === 'true') {
+    env.METRICS_PREFIX = await promptForVar('Metrics prefix', 'redirector_');
+    env.METRICS_AGGREGATOR_KEY = generateMetricsAggregatorKey();
+    env.METRICS_PUSH_GATEWAY = await promptForVar('Push gateway URL (optional)', '');
+    env.METRICS_SCRAPE_INTERVAL = await promptForVar('Scrape interval (seconds)', '15');
+    env.METRICS_HISTOGRAM_BUCKETS = await promptForVar('Histogram buckets', '0.1,5,15,50,100,200,300,400,500,1000,2000,5000');
+    
+    log('green', `✅ Generated metrics aggregator key: ${env.METRICS_AGGREGATOR_KEY.substring(0, 8)}...`);
+  }
+  
+  return env;
+}
+
+async function promptForTransactionMonitoring() {
+  log('cyan', '\n💰 Configuring Transaction Monitoring...');
+  const env = {};
+  
+  env.TRANSACTION_MONITOR_KEY = generateTransactionMonitorKey();
+  env.TRANSACTION_SAMPLING_RATE = await promptForVar('Sampling rate (0-1)', '1.0');
+  env.TRANSACTION_SLOW_THRESHOLD = await promptForVar('Slow transaction threshold (ms)', '1000');
+  env.TRANSACTION_DEADLOCK_RETRY = await promptForVar('Deadlock retry attempts', '3');
+  env.TRANSACTION_ISOLATION_LEVEL = await promptForVar('Isolation level', 'SERIALIZABLE');
+  
+  log('green', `✅ Generated transaction monitor key: ${env.TRANSACTION_MONITOR_KEY.substring(0, 8)}...`);
+  
+  return env;
+}
+
+async function promptForBackupConfig() {
+  log('cyan', '\n💾 Configuring Backup Encryption...');
+  const env = {};
+  
+  env.BACKUP_ENCRYPTION_ENABLED = await promptForVar('Enable backup encryption?', 'true');
+  
+  if (env.BACKUP_ENCRYPTION_ENABLED === 'true') {
+    env.BACKUP_ENCRYPTION_KEY = generateBackupEncryptionKey();
+    env.BACKUP_COMPRESSION_ENABLED = await promptForVar('Enable backup compression?', 'true');
+    env.BACKUP_S3_BUCKET = await promptForVar('S3 bucket name (optional)', '');
+    env.BACKUP_S3_REGION = await promptForVar('S3 region (optional)', 'us-east-1');
+    
+    if (env.BACKUP_S3_BUCKET) {
+      env.BACKUP_S3_ACCESS_KEY = await promptForVar('S3 access key', '');
+      env.BACKUP_S3_SECRET_KEY = await promptForVar('S3 secret key', '');
+    }
+    
+    log('green', `✅ Generated backup encryption key: ${env.BACKUP_ENCRYPTION_KEY.substring(0, 8)}...`);
+  }
+  
+  return env;
+}
+
+function generateSecurityReport(env, audit) {
+  const report = [];
+  const now = new Date().toISOString();
+  
+  report.push('# 🔐 Security Configuration Report');
+  report.push(`Generated: ${now}`);
+  report.push(`Environment: ${env.NODE_ENV || 'production'}`);
+  report.push(`Overall Status: ${audit.overall}`);
+  report.push('');
+  
+  report.push('## ✅ Passed Checks');
+  audit.checks.filter(c => c.status === 'PASS').forEach(c => {
+    report.push(`- ✅ ${c.name}: ${c.message}`);
+  });
+  
+  if (audit.checks.filter(c => c.status === 'PASS').length === 0) {
+    report.push('- No passed checks');
+  }
+  
+  report.push('');
+  report.push('## ⚠️ Warnings');
+  audit.checks.filter(c => c.status === 'WARN').forEach(c => {
+    report.push(`- ⚠️ ${c.name}: ${c.message}`);
+  });
+  
+  if (audit.checks.filter(c => c.status === 'WARN').length === 0) {
+    report.push('- No warnings');
+  }
+  
+  report.push('');
+  report.push('## ❌ Failed Checks');
+  audit.checks.filter(c => c.status === 'FAIL').forEach(c => {
+    report.push(`- ❌ ${c.name}: ${c.message}`);
+  });
+  
+  if (audit.checks.filter(c => c.status === 'FAIL').length === 0) {
+    report.push('- No failed checks');
+  }
+  
+  report.push('');
+  report.push('## 💡 Recommendations');
+  audit.recommendations.forEach((rec, i) => {
+    report.push(`${i + 1}. ${rec}`);
+  });
+  
+  if (audit.recommendations.length === 0) {
+    report.push('- No recommendations - your configuration looks great!');
+  }
+  
+  report.push('');
+  report.push('## 🔐 Security Checklist');
+  const checklist = [
+    { name: 'Strong session secret (32+ bytes)', check: env.SESSION_SECRET?.length >= 32 },
+    { name: 'Metrics API key configured', check: !!env.METRICS_API_KEY },
+    { name: 'Admin password hashed with bcrypt', check: !!env.ADMIN_PASSWORD_HASH },
+    { name: 'JWT secret configured (if using JWT)', check: !env.JWT_SECRET || env.JWT_SECRET.length >= 64 },
+    { name: 'Encryption key configured (if encryption enabled)', check: !env.ENABLE_ENCRYPTION || !!env.ENCRYPTION_KEY },
+    { name: 'CSRF protection enabled', check: !!env.CSRF_SECRET },
+    { name: 'Request signing configured (for API v2)', check: !env.REQUEST_SIGNING_KEY || env.REQUEST_SIGNING_KEY.length >= 32 },
+    { name: 'Rate limiting configured', check: !!env.RATE_LIMIT_MAX_REQUESTS },
+    { name: 'MFA configured (if enabled)', check: !env.MFA_ENABLED || (env.MFA_ENABLED === 'true' && env.OTP_SECRET) },
+    { name: 'Backup codes generated (if MFA enabled)', check: !env.MFA_ENABLED || env.BACKUP_CODES },
+    { name: 'WebAuthn configured (if enabled)', check: !env.WEBAUTHN_ENABLED || env.WEBAUTHN_ID },
+    { name: 'Device fingerprinting configured', check: !!env.DEVICE_FINGERPRINT_KEY },
+    { name: 'Session encryption configured', check: !!env.SESSION_ENCRYPTION_KEY },
+    { name: 'Audit logging enabled', check: env.AUDIT_LOG_ENABLED === 'true' },
+    { name: 'Metrics collection enabled', check: env.METRICS_ENABLED === 'true' },
+    { name: 'Transaction monitoring configured', check: !!env.TRANSACTION_MONITOR_KEY },
+    { name: 'Redis TLS enabled in production', check: env.NODE_ENV !== 'production' || (env.REDIS_URL && env.REDIS_URL.startsWith('rediss://')) },
+    { name: 'Database SSL enforced in production', check: env.NODE_ENV !== 'production' || (env.DATABASE_URL && env.DATABASE_URL.includes('sslmode=require')) },
+    { name: 'CSP enabled in production', check: env.NODE_ENV !== 'production' || env.CSP_ENABLED === 'true' },
+    { name: 'HSTS enabled in production', check: env.NODE_ENV !== 'production' || env.HSTS_ENABLED === 'true' },
+    { name: 'Automatic backups enabled', check: env.AUTO_BACKUP_ENABLED === 'true' },
+    { name: 'Backup encryption enabled', check: !env.AUTO_BACKUP_ENABLED || env.BACKUP_ENCRYPTION_ENABLED === 'true' },
+    { name: 'Queue authentication configured (if queues enabled)', check: !env.QUEUE_ENABLED || env.QUEUE_AUTH_TOKEN },
+    { name: 'Bull Board secured (if enabled)', check: !env.BULL_BOARD_ENABLED || !env.BULL_BOARD_AUTH_ENABLED || env.BULL_BOARD_PASSWORD_HASH }
+  ];
+  
+  checklist.forEach(item => {
+    report.push(`- [${item.check ? 'x' : ' '}] ${item.name}`);
+  });
+  
+  report.push('');
+  report.push('## 📊 Security Score');
+  
+  const passedCount = checklist.filter(item => item.check).length;
+  const totalCount = checklist.length;
+  const score = Math.round((passedCount / totalCount) * 100);
+  
+  report.push(`**${passedCount}/${totalCount} checks passed (${score}%)**`);
+  
+  if (score >= 90) {
+    report.push('🟢 Excellent security posture');
+  } else if (score >= 70) {
+    report.push('🟡 Good security posture, but improvements recommended');
+  } else {
+    report.push('🔴 Security improvements needed');
+  }
+  
+  const reportPath = path.join(process.cwd(), 'security-report.md');
+  fs.writeFileSync(reportPath, report.join('\n'));
+  log('green', `✅ Security report generated: ${reportPath}`);
+  
+  return { score, passedCount, totalCount };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   
@@ -1559,7 +2453,12 @@ async function main() {
   const generateDocker = args.includes('--docker') || generateAll;
   const generateK8s = args.includes('--kubernetes') || generateAll;
   const generateAWS = args.includes('--aws') || generateAll;
+  const generateGCP = args.includes('--gcp') || generateAll;
+  const generateAzure = args.includes('--azure') || generateAll;
+  const generateTerraform = args.includes('--terraform') || generateAll;
+  const generateAnsible = args.includes('--ansible') || generateAll;
   const generateVault = args.includes('--hashicorp') || generateAll;
+  
   const encryptSecrets = args.includes('--encrypt');
   const rotateSecrets = args.includes('--rotate');
   const requestSigning = args.includes('--request-signing') || generateAll;
@@ -1574,6 +2473,13 @@ async function main() {
   const mfa = args.includes('--mfa') || generateAll;
   const pgp = args.includes('--pgp') || generateAll;
   const ssh = args.includes('--ssh') || generateAll;
+  const webauthn = args.includes('--webauthn') || generateAll;
+  const fingerprint = args.includes('--fingerprint') || generateAll;
+  const auditLog = args.includes('--audit-log') || generateAll;
+  const metrics = args.includes('--metrics') || generateAll;
+  const transactions = args.includes('--transactions') || generateAll;
+  const session = args.includes('--session') || generateAll;
+  const backupConfig = args.includes('--backup-config') || generateAll;
   
   if (rotateSecrets && fs.existsSync(ENV_FILE)) {
     log('yellow', '🔄 Rotating secrets...');
@@ -1583,7 +2489,7 @@ async function main() {
   let password = args.find(arg => !arg.startsWith('--') && arg !== password);
   
   console.log('\n' + '='.repeat(80));
-  log('bright', '🔐 REDIRECTOR PRO v4.1.0 - ENTERPRISE SECRETS GENERATOR v3.0');
+  log('bright', '🔐 REDIRECTOR PRO v4.1.0 - ENTERPRISE SECRETS GENERATOR v4.0');
   console.log('='.repeat(80) + '\n');
 
   log('cyan', '📡 Generating secure values...\n');
@@ -1736,6 +2642,46 @@ async function main() {
     Object.assign(env, txEnv);
   }
   
+  if (webauthn) {
+    const webauthnEnv = await promptForWebAuthn();
+    Object.assign(env, webauthnEnv);
+  }
+  
+  if (mfa) {
+    const mfaEnv = await promptForMFA();
+    Object.assign(env, mfaEnv);
+  }
+  
+  if (session) {
+    const sessionEnv = await promptForSession();
+    Object.assign(env, sessionEnv);
+  }
+  
+  if (fingerprint) {
+    const fingerprintEnv = await promptForDeviceFingerprint();
+    Object.assign(env, fingerprintEnv);
+  }
+  
+  if (auditLog) {
+    const auditEnv = await promptForAuditLog();
+    Object.assign(env, auditEnv);
+  }
+  
+  if (metrics) {
+    const metricsEnv = await promptForMetrics();
+    Object.assign(env, metricsEnv);
+  }
+  
+  if (transactions) {
+    const txMonitorEnv = await promptForTransactionMonitoring();
+    Object.assign(env, txMonitorEnv);
+  }
+  
+  if (backupConfig) {
+    const backupEnv = await promptForBackupConfig();
+    Object.assign(env, backupEnv);
+  }
+  
   if (configureRedis) {
     const redisEnv = await promptForRedis();
     Object.assign(env, redisEnv);
@@ -1855,7 +2801,10 @@ async function main() {
   if (encryptSecrets && env.ENCRYPTION_KEY) {
     const sensitiveKeys = [
       'DB_PASSWORD', 'REDIS_PASSWORD', 'SMTP_PASS', 'WEBHOOK_SECRET', 
-      'API_KEY', 'JWT_SECRET', 'REQUEST_SIGNING_KEY', 'QUEUE_AUTH_TOKEN'
+      'API_KEY', 'JWT_SECRET', 'REQUEST_SIGNING_KEY', 'QUEUE_AUTH_TOKEN',
+      'MFA_ENCRYPTION_KEY', 'SESSION_ENCRYPTION_KEY', 'DEVICE_FINGERPRINT_KEY',
+      'RATE_LIMITING_KEY', 'AUDIT_LOG_KEY', 'METRICS_AGGREGATOR_KEY',
+      'TRANSACTION_MONITOR_KEY', 'BACKUP_ENCRYPTION_KEY'
     ];
     
     sensitiveKeys.forEach(key => {
@@ -1875,8 +2824,14 @@ async function main() {
       targetFile = ENV_PROD_FILE;
     } else if (args.includes('--dev')) {
       targetFile = ENV_DEV_FILE;
+    } else if (args.includes('--staging')) {
+      targetFile = ENV_STAGING_FILE;
     } else if (args.includes('--test')) {
-      targetFile = path.join(process.cwd(), '.env.test');
+      targetFile = ENV_TESTING_FILE;
+    } else if (args.includes('--ci')) {
+      targetFile = ENV_CI_FILE;
+    } else if (args.includes('--docker-env')) {
+      targetFile = ENV_DOCKER_FILE;
     }
     
     if (backup) {
@@ -1898,8 +2853,34 @@ async function main() {
         generateAWSSecrets(env, secrets);
       }
       
+      if (generateGCP) {
+        generateGCPSecrets(env, secrets);
+      }
+      
+      if (generateAzure) {
+        generateAzureSecrets(env, secrets);
+      }
+      
+      if (generateTerraform) {
+        generateTerraformVars(env, secrets);
+      }
+      
+      if (generateAnsible) {
+        generateAnsibleVars(env, secrets);
+      }
+      
       if (generateVault) {
         generateHashiCorpVaultFormat(env, secrets);
+      }
+      
+      // Generate security report
+      const audit = auditSecrets(env);
+      const { score } = generateSecurityReport(env, audit);
+      
+      if (score < 70) {
+        log('yellow', '\n⚠️ Security score below 70%. Review the security report for improvements.');
+      } else if (score >= 90) {
+        log('green', '\n✅ Excellent security score! Your configuration is well secured.');
       }
     }
   } else {
@@ -1933,6 +2914,8 @@ async function main() {
   console.log('   • Configure Redis with TLS in production');
   console.log('   • Enable encryption key rotation for long-term security');
   console.log('   • Use request signing for API v2 endpoints');
+  console.log('   • Implement WebAuthn/FIDO2 for passwordless authentication');
+  console.log('   • Enable device fingerprinting for enhanced security');
   console.log('='.repeat(80) + '\n');
   
   log('cyan', '📋 Next steps:');
@@ -1944,7 +2927,8 @@ async function main() {
   console.log('   6. Check API docs at: http://localhost:10000/api-docs');
   console.log('   7. Monitor queues at: http://localhost:10000/admin/queues');
   console.log('   8. Rotate keys with: npm run keys:rotate');
-  console.log('   9. Audit security with: npm run security:audit\n');
+  console.log('   9. Audit security with: npm run security:audit');
+  console.log('  10. Review security report: security-report.md\n');
   
   log('green', '✨ Generation complete! Your enterprise secrets are ready.\n');
   
