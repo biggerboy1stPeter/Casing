@@ -1,31 +1,39 @@
 {
   "name": "redirector-pro",
-  "version": "4.0.0",
-  "description": "Enterprise-grade URL redirector with advanced encoding, real-time monitoring, anti-bot protection, and comprehensive analytics",
+  "version": "4.1.0",
+  "description": "Enterprise-grade URL redirector with advanced encoding, real-time monitoring, anti-bot protection, encryption key rotation, request signing, and comprehensive analytics",
   "main": "server.js",
   "scripts": {
-  "prestart": "node generate-secrets.js --write",
-  "start": "node --max-old-space-size=512 server.js",
-  "dev": "nodemon --max-old-space-size=512 server.js",
-  "prod": "NODE_ENV=production node --max-old-space-size=512 server.js",
-  "debug": "node --inspect server.js",
-  "inspect": "node --inspect-brk server.js",
-  
-  "pm2": "pm2 start ecosystem.config.js",
-  "pm2:start": "pm2 start server.js --name redirector-pro --max-memory-restart 512M --instances max",
-  "pm2:stop": "pm2 stop redirector-pro",
-  "pm2:restart": "pm2 restart redirector-pro",
-  "pm2:delete": "pm2 delete redirector-pro",
-  "pm2:logs": "pm2 logs redirector-pro",
-  "pm2:monit": "pm2 monit",
-  "pm2:status": "pm2 status",
-  "pm2:save": "pm2 save",
-  "pm2:startup": "pm2 startup",
+    "prestart": "node generate-secrets.js --write",
+    "start": "node --max-old-space-size=512 server.js",
+    "dev": "nodemon --max-old-space-size=512 server.js",
+    "prod": "NODE_ENV=production node --max-old-space-size=512 server.js",
+    "debug": "node --inspect server.js",
+    "inspect": "node --inspect-brk server.js",
+    
+    "pm2": "pm2 start ecosystem.config.js",
+    "pm2:start": "pm2 start server.js --name redirector-pro --max-memory-restart 512M --instances max",
+    "pm2:stop": "pm2 stop redirector-pro",
+    "pm2:restart": "pm2 restart redirector-pro",
+    "pm2:delete": "pm2 delete redirector-pro",
+    "pm2:logs": "pm2 logs redirector-pro",
+    "pm2:monit": "pm2 monit",
+    "pm2:status": "pm2 status",
+    "pm2:save": "pm2 save",
+    "pm2:startup": "pm2 startup",
     
     "secrets": "node generate-secrets.js",
     "secrets:write": "node generate-secrets.js --write",
     "secrets:force": "node generate-secrets.js --force --write",
     "secrets:rotate": "node rotate-secrets.js",
+    
+    "keys:init": "node scripts/init-encryption-keys.js",
+    "keys:list": "node scripts/list-encryption-keys.js",
+    "keys:rotate": "node scripts/rotate-encryption-keys.js",
+    "keys:cleanup": "node scripts/cleanup-encryption-keys.js",
+    "keys:migrate": "node scripts/migrate-encrypted-data.js",
+    "keys:backup": "node scripts/backup-encryption-keys.js",
+    "keys:restore": "node scripts/restore-encryption-keys.js",
     
     "db:migrate": "node scripts/migrate.js",
     "db:migrate:create": "node scripts/create-migration.js",
@@ -37,12 +45,15 @@
     "db:reset": "node scripts/reset-database.js",
     "db:analyze": "node scripts/analyze-database.js",
     "db:vacuum": "node scripts/vacuum-database.js",
+    "db:transactions:test": "node scripts/test-transactions.js",
+    "db:audit:log": "node scripts/audit-log-viewer.js",
     
     "clean": "node scripts/cleanup.js",
     "clean:logs": "node scripts/clean-logs.js",
     "clean:cache": "node scripts/clean-cache.js",
     "clean:temp": "node scripts/clean-temp.js",
-    "clean:all": "npm run clean:logs && npm run clean:cache && npm run clean:temp",
+    "clean:keys": "node scripts/clean-expired-keys.js",
+    "clean:all": "npm run clean:logs && npm run clean:cache && npm run clean:temp && npm run clean:keys",
     
     "test": "jest",
     "test:watch": "jest --watch",
@@ -54,6 +65,10 @@
     "test:load": "artillery run tests/load/test.yml",
     "test:api": "newman run tests/postman/collection.json -e tests/postman/environment.json",
     "test:api:html": "newman run tests/postman/collection.json -e tests/postman/environment.json -r htmlextra --reporter-htmlextra-export tests/reports/api-test-report.html",
+    "test:signatures": "node tests/manual/signature-test.js",
+    "test:encryption": "node tests/manual/encryption-test.js",
+    "test:transactions": "node tests/manual/transaction-test.js",
+    "test:versions": "node tests/manual/version-test.js",
     
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -74,6 +89,8 @@
     "security:scan": "node scripts/security-scan.js",
     "security:audit": "npm audit --json > security-audit.json",
     "security:check": "snyk test",
+    "security:signatures": "node scripts/verify-signatures.js",
+    "security:keys:audit": "node scripts/audit-encryption-keys.js",
     
     "docker:build": "docker build -t redirector-pro .",
     "docker:build:no-cache": "docker build --no-cache -t redirector-pro .",
@@ -91,26 +108,32 @@
     "health": "curl http://localhost:10000/health",
     "health:encoding": "curl http://localhost:10000/health/encoding",
     "health:full": "curl http://localhost:10000/health/full -H 'Cookie: redirector.sid=$SESSION_ID'",
+    "health:encryption": "curl http://localhost:10000/api/v2/health/encryption",
     "metrics": "curl -H 'X-API-Key: $METRICS_API_KEY' http://localhost:10000/metrics",
     "metrics:prom": "curl http://localhost:10000/metrics",
+    "metrics:signatures": "curl http://localhost:10000/metrics | grep signature",
     
     "backup": "node scripts/backup.js",
     "backup:full": "node scripts/backup.js --full",
     "backup:config": "node scripts/backup.js --config",
     "backup:logs": "node scripts/backup.js --logs",
+    "backup:keys": "node scripts/backup.js --keys",
     
     "restore": "node scripts/restore.js",
     "restore:latest": "node scripts/restore.js --latest",
+    "restore:keys": "node scripts/restore.js --keys",
     
     "analyze": "node scripts/analyze-logs.js",
     "analyze:requests": "node scripts/analyze-logs.js --type=requests",
     "analyze:errors": "node scripts/analyze-logs.js --type=errors",
     "analyze:performance": "node scripts/analyze-logs.js --type=performance",
     "analyze:encoding": "node scripts/analyze-logs.js --type=encoding",
+    "analyze:signatures": "node scripts/analyze-logs.js --type=signatures",
     
     "monitor": "node scripts/monitor.js",
     "monitor:realtime": "node scripts/monitor.js --realtime",
     "monitor:alerts": "node scripts/monitor.js --alerts",
+    "monitor:keys": "node scripts/monitor.js --keys",
     
     "cache:clear": "node scripts/clear-cache.js",
     "cache:stats": "node scripts/cache-stats.js",
@@ -120,17 +143,22 @@
     
     "docs": "node scripts/generate-docs.js",
     "docs:serve": "npx serve docs",
+    "docs:api": "npx serve api-docs",
     
     "validate:env": "node scripts/validate-env.js",
     "validate:config": "node scripts/validate-config.js",
+    "validate:signatures": "node scripts/validate-signatures.js",
     
     "generate:qrcode": "node scripts/generate-qrcode.js",
     "generate:test-links": "node scripts/generate-test-links.js",
+    "generate:signature": "node scripts/generate-signature.js",
+    "generate:api-key": "node scripts/generate-api-key.js",
     
     "report": "node scripts/generate-report.js",
     "report:daily": "node scripts/generate-report.js --period=daily",
     "report:weekly": "node scripts/generate-report.js --period=weekly",
     "report:monthly": "node scripts/generate-report.js --period=monthly",
+    "report:security": "node scripts/generate-report.js --type=security",
     
     "notify:slack": "node scripts/notify-slack.js",
     "notify:email": "node scripts/notify-email.js",
@@ -139,9 +167,10 @@
     "maintenance": "node scripts/maintenance.js",
     "maintenance:optimize": "node scripts/maintenance.js --optimize",
     "maintenance:cleanup": "node scripts/maintenance.js --cleanup",
+    "maintenance:keys": "node scripts/maintenance.js --keys",
     
-    "init": "npm install && npm run db:setup && npm run secrets:write",
-    "reset": "npm run clean:all && npm run db:reset && npm run secrets:force",
+    "init": "npm install && npm run db:setup && npm run secrets:write && npm run keys:init",
+    "reset": "npm run clean:all && npm run db:reset && npm run secrets:force && npm run keys:init",
     "update:all": "npm run update:check && npm run update:apply && npm run audit:fix",
     "deploy": "npm run test && npm run build && npm run docker:compose:build",
     "deploy:prod": "npm run test:ci && npm run docker:build && npm run docker:push",
@@ -153,6 +182,9 @@
     
     "benchmark": "node scripts/benchmark.js",
     "benchmark:encoding": "node scripts/benchmark-encoding.js",
+    "benchmark:signatures": "node scripts/benchmark-signatures.js",
+    "benchmark:encryption": "node scripts/benchmark-encryption.js",
+    "benchmark:transactions": "node scripts/benchmark-transactions.js",
     
     "profile": "node --prof server.js",
     "profile:analyze": "node --prof-process isolate-*.log > profile.txt",
@@ -161,7 +193,11 @@
     "cluster:start": "pm2 start cluster.js -i max",
     
     "env:example": "cp .env.example .env",
-    "env:validate": "node scripts/validate-env.js --strict"
+    "env:validate": "node scripts/validate-env.js --strict",
+    
+    "api:v1:test": "curl -X POST http://localhost:10000/api/v1/generate -H 'Content-Type: application/json' -d '{\"url\":\"https://example.com\"}'",
+    "api:v2:test": "node scripts/test-v2-api.js",
+    "api:versions": "curl http://localhost:10000/api/versions"
   },
   "keywords": [
     "redirect", 
@@ -181,13 +217,17 @@
     "dashboard",
     "encoding",
     "encryption",
+    "key-rotation",
+    "request-signing",
     "compression",
     "rate-limiting",
     "redis",
     "postgresql",
     "bull-queue",
     "prometheus",
-    "socket-io"
+    "socket-io",
+    "api-versioning",
+    "database-transactions"
   ],
   "author": "",
   "license": "MIT",
@@ -207,6 +247,7 @@
     "connect-redis": "^7.1.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
+    "crypto-js": "^4.2.0",
     "csurf": "^1.11.0",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
@@ -224,15 +265,19 @@
     "javascript-obfuscator": "^4.1.0",
     "joi": "^17.11.0",
     "jsonwebtoken": "^9.0.2",
+    "keyv": "^4.5.4",
+    "keyv-file": "^0.2.0",
     "lodash": "^4.17.21",
     "moment": "^2.29.4",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "node-cache": "^5.1.2",
     "node-fetch": "^2.7.0",
+    "node-forge": "^1.3.1",
     "nodemailer": "^6.9.7",
     "opossum": "^8.1.3",
     "pg": "^8.11.3",
+    "pg-native": "^3.0.1",
     "prom-client": "^15.1.3",
     "qrcode": "^1.5.3",
     "rate-limiter-flexible": "^2.4.1",
@@ -240,6 +285,7 @@
     "redis": "^4.6.10",
     "response-time": "^2.3.2",
     "sanitize-html": "^2.11.0",
+    "semver": "^7.5.4",
     "socket.io": "^4.5.4",
     "socket.io-redis": "^6.1.1",
     "swagger-jsdoc": "^6.2.8",
@@ -311,14 +357,15 @@
       "!**/scripts/**",
       "!**/tests/**",
       "!**/public/**",
-      "!**/logs/**"
+      "!**/logs/**",
+      "!**/data/**"
     ],
     "coverageThreshold": {
       "global": {
-        "branches": 70,
-        "functions": 80,
-        "lines": 80,
-        "statements": 80
+        "branches": 75,
+        "functions": 85,
+        "lines": 85,
+        "statements": 85
       }
     },
     "setupFilesAfterEnv": ["./tests/setup.js"],
@@ -342,7 +389,7 @@
   },
   "nodemonConfig": {
     "watch": ["server.js", "src/", "scripts/"],
-    "ignore": ["logs/*", "public/*", "tests/*"],
+    "ignore": ["logs/*", "public/*", "tests/*", "data/*"],
     "ext": "js,json",
     "env": {
       "NODE_ENV": "development"
@@ -382,7 +429,7 @@
       "no-param-reassign": "off",
       "no-underscore-dangle": "off",
       "class-methods-use-this": "off",
-      "import/no-extraneous-dependencies": ["error", { "devDependencies": ["**/tests/**/*.js", "**/scripts/**/*.js"] }]
+      "import/no-extraneous-dependencies": ["error", { "devDependencies": ["**/tests/**/*.js", "**/scripts/**/*.js", "**/generate-secrets.js"] }]
     }
   }
 }
