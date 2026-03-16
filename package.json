@@ -197,7 +197,16 @@
     
     "api:v1:test": "curl -X POST http://localhost:10000/api/v1/generate -H 'Content-Type: application/json' -d '{\"url\":\"https://example.com\"}'",
     "api:v2:test": "node scripts/test-v2-api.js",
-    "api:versions": "curl http://localhost:10000/api/versions"
+    "api:versions": "curl http://localhost:10000/api/versions",
+    
+    "diagnose": "node diagnose.js",
+    "diagnose:full": "node diagnose.js && npm run health",
+    "start:fixed": "node --max-old-space-size=512 server.js",
+    "start:verbose": "node --trace-warnings --max-old-space-size=512 server.js",
+    "start:render": "node server.js",
+    "start:debug": "node --inspect --max-old-space-size=512 server.js",
+    "render:start": "node render-start.js",
+    "port:check": "node -e \"require('http').createServer().listen(process.env.PORT || 10000, '0.0.0.0', () => { console.log('✅ Port ' + (process.env.PORT || 10000) + ' is available'); process.exit(); }).on('error', (e) => { console.error('❌ Port ' + (process.env.PORT || 10000) + ' is in use:', e.message); process.exit(1); })\""
   },
   "keywords": [
     "redirect", 
