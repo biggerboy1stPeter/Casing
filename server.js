@@ -55,6 +55,54 @@ const semver = require('semver');
 // Load environment variables with validation
 dotenv.config();
 
+// ==================== ENVIRONMENT VALIDATION ====================
+function validateEnvironment() {
+  const required = [
+    'NODE_ENV',
+    'PORT',
+    'TARGET_URL',
+    'SESSION_SECRET',
+    'METRICS_API_KEY',
+    'ADMIN_USERNAME',
+    'ADMIN_PASSWORD_HASH',
+    'REQUEST_SIGNING_SECRET'
+  ];
+  
+  const missing = required.filter(env => !process.env[env]);
+  
+  if (missing.length > 0) {
+    console.error('\n❌ Missing required environment variables:');
+    missing.forEach(v => console.error(`   - ${v}`));
+    console.error('\nCreate a .env file with these variables:');
+    console.error(`
+NODE_ENV=production
+PORT=10000
+TARGET_URL=https://your-target-site.com
+SESSION_SECRET=your-32-character-min-secret-key-here
+METRICS_API_KEY=your-16-character-min-key
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=$2a$12$... (bcrypt hash of your password)
+REQUEST_SIGNING_SECRET=your-32-character-min-signing-secret
+    `);
+    process.exit(1);
+  }
+  
+  if (process.env.SESSION_SECRET.length < 32) {
+    console.error('❌ SESSION_SECRET must be at least 32 characters long');
+    process.exit(1);
+  }
+  
+  if (process.env.REQUEST_SIGNING_SECRET.length < 32) {
+    console.error('❌ REQUEST_SIGNING_SECRET must be at least 32 characters long');
+    process.exit(1);
+  }
+  
+  console.log('✅ All required environment variables validated');
+}
+
+// CALL ENVIRONMENT VALIDATION
+validateEnvironment();
+
 // ─── Configuration Schema with Strict Validation ─────────────────────────────
 const configSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('production'),
@@ -217,6 +265,57 @@ CONFIG.BLOCKED_DOMAINS = CONFIG.BLOCKED_DOMAINS ? CONFIG.BLOCKED_DOMAINS.split('
 
 CONFIG.SUPPORTED_API_VERSIONS = CONFIG.SUPPORTED_API_VERSIONS ? 
   CONFIG.SUPPORTED_API_VERSIONS.split(',').map(v => v.trim()) : ['v1', 'v2'];
+
+// ==================== MISSING FUNCTIONS - ADDED HERE ====================
+
+// ✅ URL VALIDATION FUNCTION
+function validateUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    if (!['http:', 'https:'].includes(urlObj.protocol)) {
+      return false;
+    }
+    
+    const hostname = urlObj.hostname.toLowerCase();
+    const isBlocked = CONFIG.BLOCKED_DOMAINS.some(blocked => 
+      hostname === blocked || hostname.endsWith(`.${blocked}`)
+    );
+    
+    if (isBlocked) return false;
+    
+    // Check for private IP ranges
+    const ipPatterns = [
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}$/,
+      /^192\.168\.\d{1,3}\.\d{1,3}$/,
+      /^169\.254\.\d{1,3}\.\d{1,3}$/
+    ];
+    
+    return !ipPatterns.some(pattern => pattern.test(hostname));
+  } catch (err) {
+    return false;
+  }
+}
+
+// ✅ LINK ID VALIDATION MIDDLEWARE
+const validateLinkId = (req, res, next) => {
+  const id = req.params.id;
+  if (!id || !/^[a-f0-9]{32,64}$/i.test(id)) {
+    throw new AppError('Invalid link ID format', 400, 'INVALID_LINK_ID');
+  }
+  next();
+};
+
+// ✅ STORE INTERVALS FOR CLEANUP
+global.intervals = {
+  memoryMonitor: null,
+  cpuMonitor: null,
+  statsUpdate: null,
+  percentileCalculation: null,
+  queueMetrics: null,
+  keyRotationCheck: null,
+  backup: null
+};
 
 // Allow runtime config reload
 const reloadConfig = async () => {
@@ -547,18 +646,6 @@ const circuitBreakerOptions = {
   volumeThreshold: 10
 };
 
-const databaseBreaker = new circuitBreaker(async (query, params, options = {}) => {
-  return await queryWithTimeout(query, params, options);
-}, circuitBreakerOptions);
-
-const redisBreaker = new circuitBreaker(async (command, ...args) => {
-  return await redisClient[command](...args);
-}, { ...circuitBreakerOptions, name: 'redis' });
-
-const encodingBreaker = new circuitBreaker(async (target, req, options) => {
-  return await generateLongLink(target, req, options);
-}, { ...circuitBreakerOptions, name: 'encoding', timeout: 10000 });
-
 // ─── Redis Connection with Advanced Configuration ──────────────────────────
 let redisClient;
 let subscriber;
@@ -670,6 +757,19 @@ const rateLimiter = rateLimiterRedis || new RateLimiterMemory({
   blockDuration: 60
 });
 
+const databaseBreaker = new circuitBreaker(async (query, params, options = {}) => {
+  return await queryWithTimeout(query, params, options);
+}, circuitBreakerOptions);
+
+const redisBreaker = new circuitBreaker(async (command, ...args) => {
+  return await redisClient[command](...args);
+}, { ...circuitBreakerOptions, name: 'redis' });
+
+const encodingBreaker = new circuitBreaker(async (target, req, options) => {
+  return await generateLongLink(target, req, options);
+}, { ...circuitBreakerOptions, name: 'encoding', timeout: 10000 });
+
+// ✅ RATE LIMITER MIDDLEWARE
 const rateLimiterMiddleware = (req, res, next) => {
   const key = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
   
@@ -677,11 +777,12 @@ const rateLimiterMiddleware = (req, res, next) => {
     .then(() => {
       next();
     })
-    .catch(() => {
+    .catch((err) => {
       logger.warn('Rate limit exceeded', { ip: key, path: req.path });
+      botBlocks.inc({ reason: 'rate_limit' });
       res.status(429).json({ 
         error: 'Too many requests',
-        retryAfter: Math.ceil(rateLimiter.msBeforeNext / 1000)
+        retryAfter: Math.ceil(err.msBeforeNext / 1000)
       });
     });
 };
@@ -903,7 +1004,7 @@ if (redisClient) {
   }
 
   // Queue metrics collection
-  setInterval(async () => {
+  global.intervals.queueMetrics = setInterval(async () => {
     if (!redisClient) return;
     
     const queues = [redirectQueue, emailQueue, analyticsQueue, encodingQueue];
@@ -1035,7 +1136,7 @@ class EncryptionKeyManager {
   }
 
   startRotationScheduler() {
-    setInterval(async () => {
+    global.intervals.keyRotationCheck = setInterval(async () => {
       try {
         await this.rotateKeyIfNeeded();
       } catch (err) {
@@ -2180,6 +2281,59 @@ async function updateAnalytics(type, data) {
   }
 }
 
+// ==================== ADD getAllLinks FUNCTION HERE ====================
+// ✅ GET ALL LINKS FUNCTION (MUST BE BEFORE SOCKET.IO)
+async function getAllLinks() {
+  if (!dbPool) {
+    const keys = linkCache.keys();
+    const links = [];
+    for (const key of keys) {
+      const data = cacheGet(linkCache, 'link', key);
+      if (data) {
+        links.push({
+          id: key,
+          target_url: data.target,
+          created_at: new Date(data.created),
+          expires_at: new Date(data.expiresAt),
+          current_clicks: data.currentClicks || 0,
+          max_clicks: data.maxClicks || null,
+          password_protected: !!data.passwordHash,
+          notes: data.notes || '',
+          link_mode: data.linkMode || 'short',
+          link_length: data.linkMetadata?.length || 0,
+          encoding_layers: data.encodingMetadata?.layers?.length || 0,
+          encoding_complexity: data.encodingMetadata?.complexity || 0,
+          api_version: data.metadata?.apiVersion || 'v1',
+          status: data.expiresAt > Date.now() ? 'active' : 'expired'
+        });
+      }
+    }
+    return links;
+  }
+
+  try {
+    const result = await queryWithTimeout(
+      `SELECT id, target_url, created_at, expires_at, current_clicks, max_clicks, 
+              (password_hash IS NOT NULL) as password_protected, COALESCE(metadata->>'notes', '') as notes,
+              link_mode, (link_metadata->>'length')::int as link_length,
+              jsonb_array_length(encoding_metadata->'layers') as encoding_layers,
+              encoding_complexity, api_version,
+              CASE 
+                WHEN expires_at < NOW() THEN 'expired'
+                WHEN current_clicks >= max_clicks AND max_clicks IS NOT NULL THEN 'completed'
+                ELSE 'active'
+              END as status
+       FROM links 
+       ORDER BY created_at DESC 
+       LIMIT 1000`
+    );
+    return result.rows;
+  } catch (err) {
+    logger.error('Error fetching links:', err);
+    return [];
+  }
+}
+
 // ─── Socket.IO Setup with Authentication and Namespaces ────────────────────
 const io = new Server(server, {
   cors: {
@@ -2825,8 +2979,8 @@ const stats = {
   }
 };
 
-// Memory monitoring
-setInterval(() => {
+// Memory monitoring - FIXED: Using global.intervals
+global.intervals.memoryMonitor = setInterval(() => {
   const memUsage = process.memoryUsage();
   stats.realtime.currentMemory = memUsage.heapUsed;
   stats.realtime.peakMemory = Math.max(stats.realtime.peakMemory, memUsage.heapUsed);
@@ -2862,7 +3016,7 @@ setInterval(() => {
 
 // CPU monitoring
 let lastCPUUsage = process.cpuUsage();
-setInterval(() => {
+global.intervals.cpuMonitor = setInterval(() => {
   const cpuUsage = process.cpuUsage(lastCPUUsage);
   lastCPUUsage = process.cpuUsage();
   
@@ -2981,7 +3135,7 @@ function getConfigForClient() {
 }
 
 // Update realtime stats
-setInterval(() => {
+global.intervals.statsUpdate = setInterval(() => {
   stats.realtime.activeLinks = linkCache.keys().length;
   
   if (stats.realtime.lastMinute.length > 60) {
@@ -3031,7 +3185,7 @@ setInterval(() => {
 }, 1000);
 
 // Calculate percentiles
-setInterval(() => {
+global.intervals.percentileCalculation = setInterval(() => {
   if (stats.performance.responseTimes.length > 0) {
     const sorted = [...stats.performance.responseTimes].sort((a, b) => a - b);
     const p95Index = Math.floor(sorted.length * 0.95);
@@ -5236,57 +5390,6 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
   }
 });
 
-async function getAllLinks() {
-  if (!dbPool) {
-    const keys = linkCache.keys();
-    const links = [];
-    for (const key of keys) {
-      const data = cacheGet(linkCache, 'link', key);
-      if (data) {
-        links.push({
-          id: key,
-          target_url: data.target,
-          created_at: new Date(data.created),
-          expires_at: new Date(data.expiresAt),
-          current_clicks: data.currentClicks || 0,
-          max_clicks: data.maxClicks || null,
-          password_protected: !!data.passwordHash,
-          notes: data.notes || '',
-          link_mode: data.linkMode || 'short',
-          link_length: data.linkMetadata?.length || 0,
-          encoding_layers: data.encodingMetadata?.layers?.length || 0,
-          encoding_complexity: data.encodingMetadata?.complexity || 0,
-          api_version: data.metadata?.apiVersion || 'v1',
-          status: data.expiresAt > Date.now() ? 'active' : 'expired'
-        });
-      }
-    }
-    return links;
-  }
-
-  try {
-    const result = await queryWithTimeout(
-      `SELECT id, target_url, created_at, expires_at, current_clicks, max_clicks, 
-              (password_hash IS NOT NULL) as password_protected, COALESCE(metadata->>'notes', '') as notes,
-              link_mode, (link_metadata->>'length')::int as link_length,
-              jsonb_array_length(encoding_metadata->'layers') as encoding_layers,
-              encoding_complexity, api_version,
-              CASE 
-                WHEN expires_at < NOW() THEN 'expired'
-                WHEN current_clicks >= max_clicks AND max_clicks IS NOT NULL THEN 'completed'
-                ELSE 'active'
-              END as status
-       FROM links 
-       ORDER BY created_at DESC 
-       LIMIT 1000`
-    );
-    return result.rows;
-  } catch (err) {
-    logger.error('Error fetching links:', err);
-    return [];
-  }
-}
-
 // Delete Link
 app.delete('/api/links/:id', csrfProtection, validateLinkId, async (req, res, next) => {
   try {
@@ -6091,8 +6194,7 @@ app.get('/v/:id', strictLimiter, validateLinkId, async (req, res, next) => {
   }
 });
 
-// Helper functions for pages (keep existing passwordProtectedPage and qrCodePage functions)
-
+// Helper functions for pages
 function passwordProtectedPage(linkId, error, nonce) {
   return `
     <!DOCTYPE html>
@@ -6101,84 +6203,108 @@ function passwordProtectedPage(linkId, error, nonce) {
       <title>Password Protected - Redirector Pro</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-      <style>
+      <style nonce="${nonce}">
         *{margin:0;padding:0;box-sizing:border-box}
         body{min-height:100vh;background:#000;color:#ddd;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;padding:20px}
-        .login-wrapper{width:100%;max-width:1000px;background:#0a0a0a;border-radius:28px;overflow:hidden;box-shadow:0 40px 100px rgba(0,0,0,0.9),inset 0 0 80px rgba(20,20,20,0.6);display:flex;border:1px solid #111;animation:fadeIn 0.6s ease-out}
-        @keyframes fadeIn{from{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
-        .image-side{flex:1.3;background:#000;overflow:hidden}
-        .image-side img{width:100%;height:100%;object-fit:cover;object-position:center;opacity:0.88;filter:contrast(1.15) brightness(0.92)}
-        .form-side{flex:1;padding:3rem;display:flex;flex-direction:column;justify-content:center;background:linear-gradient(135deg,rgba(15,15,15,0.92),rgba(8,8,8,0.95));backdrop-filter:blur(10px)}
-        .dots{font-size:2.2rem;letter-spacing:8px;opacity:0.3;margin-bottom:2rem;user-select:none;color:#888}
-        h1{font-size:2.5rem;font-weight:400;letter-spacing:-1px;margin-bottom:0.5rem;background:linear-gradient(90deg,#e0e0e0,#b0b0b0);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-        .subtitle{font-size:1rem;color:#888;margin-bottom:2rem;font-weight:300}
-        .info-box{background:rgba(0,100,200,0.2);border-left:4px solid #3b82f6;padding:1rem;border-radius:12px;margin-bottom:1.5rem;font-size:0.9rem;color:#9ac7ff;border:1px solid rgba(59,130,246,0.2)}
-        .info-box i{margin-right:0.5rem;color:#3b82f6}
-        .alert{background:rgba(239,68,68,0.1);border-left:4px solid #ef4444;color:#fecaca;padding:1rem;border-radius:12px;margin-bottom:1.5rem;display:${error ? 'flex' : 'none'};align-items:center;gap:0.75rem;border:1px solid rgba(239,68,68,0.2);animation:shake 0.5s ease}
-        @keyframes shake{0%,100%{transform:translateX(0)}10%,30%,50%,70%,90%{transform:translateX(-5px)}20%,40%,60%,80%{transform:translateX(5px)}}
-        .form-group{margin-bottom:1.5rem}
-        label{font-size:0.92rem;color:#aaa;margin-bottom:0.4rem;display:block;font-weight:400;letter-spacing:0.3px}
-        .input-wrapper{position:relative}
-        .input-icon{position:absolute;left:1rem;top:50%;transform:translateY(-50%);color:#666;font-size:1.1rem;transition:color 0.2s;z-index:1}
-        input{width:100%;padding:1rem 1rem 1rem 3rem;background:rgba(20,20,20,0.7);border:1px solid #222;border-radius:12px;color:#eee;font-size:1rem;transition:all 0.22s;backdrop-filter:blur(4px)}
-        input:hover{border-color:#333}
-        input:focus{outline:none;border-color:#555;background:rgba(30,30,30,0.8);box-shadow:0 0 0 3px rgba(80,80,80,0.2)}
-        input:focus + .input-icon{color:#888}
-        input::placeholder{color:#444}
-        .password-toggle{position:absolute;right:1rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#666;font-size:1.2rem;cursor:pointer;padding:0.4rem;transition:color 0.2s;z-index:2}
-        .password-toggle:hover{color:#aaa}
-        button{width:100%;padding:1rem;background:linear-gradient(90deg,#5a5a5a 0%,#8c8c8c 50%,#5a5a5a 100%);color:white;font-size:1rem;font-weight:500;border:none;border-radius:14px;cursor:pointer;transition:all 0.3s;box-shadow:0 6px 20px rgba(0,0,0,0.5);background-size:200% 100%;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:0.5rem}
-        button::before{content:'';position:absolute;top:50%;left:50%;width:0;height:0;border-radius:50%;background:rgba(255,255,255,0.2);transform:translate(-50%, -50%);transition:width 0.6s,height 0.6s}
-        button:hover::before{width:300px;height:300px}
-        button:hover{background-position:100% 0;transform:translateY(-2px);box-shadow:0 12px 35px rgba(100,100,100,0.3)}
-        button:disabled{opacity:0.5;cursor:not-allowed;transform:none}
+        .login-wrapper{width:100%;max-width:1000px;background:#0a0a0a;border-radius:28px;overflow:hidden;box-shadow:0 40px 100px rgba(0,0,0,0.9);display:flex;border:1px solid #111}
+        .image-side{flex:1.3;background:#000}
+        .image-side img{width:100%;height:100%;object-fit:cover;opacity:0.88}
+        .form-side{flex:1;padding:3rem;background:linear-gradient(135deg,rgba(15,15,15,0.92),rgba(8,8,8,0.95))}
+        h1{font-size:2.5rem;margin-bottom:0.5rem;background:linear-gradient(90deg,#e0e0e0,#b0b0b0);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+        .subtitle{font-size:1rem;color:#888;margin-bottom:2rem}
+        .alert{background:rgba(239,68,68,0.1);border-left:4px solid #ef4444;color:#fecaca;padding:1rem;border-radius:12px;margin-bottom:1.5rem;display:${error ? 'flex' : 'none'}}
+        .input-wrapper{position:relative;margin-bottom:1.5rem}
+        .input-icon{position:absolute;left:1rem;top:50%;transform:translateY(-50%);color:#666;z-index:1}
+        input{width:100%;padding:1rem 1rem 1rem 3rem;background:rgba(20,20,20,0.7);border:1px solid #222;border-radius:12px;color:#eee;font-size:1rem}
+        input:focus{outline:none;border-color:#555}
+        .password-toggle{position:absolute;right:1rem;top:50%;transform:translateY(-50%);background:none;border:none;color:#666;cursor:pointer}
+        button{width:100%;padding:1rem;background:linear-gradient(90deg,#5a5a5a 0%,#8c8c8c 50%,#5a5a5a 100%);color:white;border:none;border-radius:14px;cursor:pointer;font-size:1rem}
+        button:hover{transform:translateY(-2px)}
+        button:disabled{opacity:0.5;cursor:not-allowed}
         .loading{display:none;text-align:center;margin-top:1.5rem;color:#888}
         .loading i{animation:spin 0.8s linear infinite}
         @keyframes spin{to{transform:rotate(360deg)}}
         .footer{text-align:center;margin-top:2rem;color:#555;font-size:0.85rem}
-        .security-badge{display:flex;justify-content:center;gap:1rem;margin-top:1.5rem;font-size:0.75rem;color:#666}
-        .security-badge i{color:#4ade80}
-        @media (max-width:768px){.login-wrapper{flex-direction:column;max-width:450px}.image-side{height:200px;flex:none}.form-side{padding:2rem}h1{font-size:2rem}}
-        @media (max-width:480px){.image-side{height:150px}.form-side{padding:1.5rem}h1{font-size:1.8rem}}
       </style>
     </head>
     <body>
       <div class="login-wrapper">
         <div class="image-side">
-          <img src="https://img.freepik.com/free-photo/3d-rendering-abstract-black-white-background_23-2150914061.jpg" alt="Abstract black chrome background">
+          <img src="https://img.freepik.com/free-photo/3d-rendering-abstract-black-white-background_23-2150914061.jpg" alt="Abstract background">
         </div>
         <div class="form-side">
-          <div class="dots">•••</div>
           <h1>Protected Link</h1>
           <p class="subtitle">This link requires a password</p>
-          <div class="info-box"><i class="fas fa-info-circle"></i><span>Enter the password to access the secured content</span></div>
-          <div class="alert" id="errorAlert"><i class="fas fa-exclamation-circle"></i><span id="errorMessage">${error}</span></div>
+          <div class="alert" id="errorAlert">
+            <span id="errorMessage">${error}</span>
+          </div>
           <form id="passwordForm">
-            <div class="form-group">
-              <label for="password">Password</label>
-              <div class="input-wrapper">
-                <i class="fas fa-lock input-icon"></i>
-                <input type="password" id="password" placeholder="Enter your password" autofocus required>
-                <button type="button" class="password-toggle" id="togglePassword" tabindex="-1">
-                  <i class="fa-regular fa-eye"></i>
-                </button>
-              </div>
+            <div class="input-wrapper">
+              <i class="fas fa-lock input-icon"></i>
+              <input type="password" id="password" placeholder="Enter your password" autofocus required>
+              <button type="button" class="password-toggle" id="togglePassword" tabindex="-1">
+                <i class="fa-regular fa-eye"></i>
+              </button>
             </div>
-            <button type="submit" id="submitBtn"><span>Access Link</span><i class="fas fa-arrow-right"></i></button>
+            <button type="submit" id="submitBtn"><span>Access Link</span></button>
             <div class="loading" id="loading"><i class="fas fa-spinner"></i> Verifying...</div>
           </form>
-          <div class="security-badge"><span><i class="fas fa-lock"></i> 256-bit SSL</span><span><i class="fas fa-shield"></i> Encrypted</span><span><i class="fas fa-clock"></i> Secure</span></div>
-          <div class="footer"><i class="fas fa-shield-halved"></i> Redirector Pro • Secure Link Protection</div>
+          <div class="footer">Redirector Pro • Secure Link Protection</div>
         </div>
       </div>
       <script nonce="${nonce}">
-        const form=document.getElementById('passwordForm');const passwordInput=document.getElementById('password');const submitBtn=document.getElementById('submitBtn');const loading=document.getElementById('loading');const errorAlert=document.getElementById('errorAlert');const errorMessage=document.getElementById('errorMessage');const togglePassword=document.getElementById('togglePassword');
-        togglePassword.addEventListener('click',()=>{const type=passwordInput.getAttribute('type')==='password'?'text':'password';passwordInput.setAttribute('type',type);togglePassword.querySelector('i').className=type==='password'?'fa-regular fa-eye':'fa-regular fa-eye-slash'});
-        form.addEventListener('submit',async(e)=>{e.preventDefault();const password=passwordInput.value.trim();if(!password){showError('Please enter a password');return}
-        submitBtn.disabled=true;loading.style.display='block';errorAlert.style.display='none';try{const response=await fetch('/v/${linkId}/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});const data=await response.json();if(response.ok&&data.success){window.location.href=data.redirect?data.target:data.target}else{showError(data.error||'Invalid password');submitBtn.disabled=false;loading.style.display='none';passwordInput.value='';passwordInput.focus()}}catch(err){showError('Connection error. Please try again.');submitBtn.disabled=false;loading.style.display='none'}});
-        function showError(message){errorMessage.textContent=message;errorAlert.style.display='flex';setTimeout(()=>{errorAlert.style.display='none'},3000)}
-        passwordInput.addEventListener('keypress',(e)=>{if(e.key==='Enter'&&!submitBtn.disabled){form.dispatchEvent(new Event('submit'))}});
-        passwordInput.addEventListener('input',()=>{errorAlert.style.display='none'});
+        const form=document.getElementById('passwordForm');
+        const passwordInput=document.getElementById('password');
+        const submitBtn=document.getElementById('submitBtn');
+        const loading=document.getElementById('loading');
+        const errorAlert=document.getElementById('errorAlert');
+        const errorMessage=document.getElementById('errorMessage');
+        const togglePassword=document.getElementById('togglePassword');
+        
+        togglePassword.addEventListener('click',()=>{
+          const type=passwordInput.getAttribute('type')==='password'?'text':'password';
+          passwordInput.setAttribute('type',type);
+          togglePassword.querySelector('i').className=type==='password'?'fa-regular fa-eye':'fa-regular fa-eye-slash';
+        });
+        
+        form.addEventListener('submit',async(e)=>{
+          e.preventDefault();
+          const password=passwordInput.value.trim();
+          if(!password){
+            showError('Please enter a password');
+            return;
+          }
+          submitBtn.disabled=true;
+          loading.style.display='block';
+          errorAlert.style.display='none';
+          try{
+            const response=await fetch('/v/${linkId}/verify',{
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({password})
+            });
+            const data=await response.json();
+            if(response.ok&&data.success){
+              window.location.href=data.target;
+            }else{
+              showError(data.error||'Invalid password');
+              submitBtn.disabled=false;
+              loading.style.display='none';
+              passwordInput.value='';
+              passwordInput.focus();
+            }
+          }catch(err){
+            showError('Connection error. Please try again.');
+            submitBtn.disabled=false;
+            loading.style.display='none';
+          }
+        });
+        
+        function showError(message){
+          errorMessage.textContent=message;
+          errorAlert.style.display='flex';
+          setTimeout(()=>{errorAlert.style.display='none'},3000);
+        }
       </script>
     </body>
     </html>
@@ -6193,13 +6319,12 @@ function qrCodePage(target, qrData, nonce) {
       <title>QR Code - Redirector Pro</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta http-equiv="refresh" content="5;url=${target}">
-      <style>
-        body{min-height:100vh;background:#000;color:#ddd;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;margin:0;padding:20px}
-        .card{background:#0a0a0a;padding:2rem;border-radius:24px;text-align:center;max-width:400px;border:1px solid #1a1a1a;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5)}
-        h2{font-size:1.5rem;margin-bottom:1rem;color:#e0e0e0;font-weight:400}
-        img{max-width:100%;height:auto;border-radius:16px;margin:1rem 0;border:1px solid #2a2a2a}
-        p{color:#888;margin:0.5rem 0}
-        .countdown{color:#4ade80;font-weight:bold;margin-top:1rem}
+      <style nonce="${nonce}">
+        body{min-height:100vh;background:#000;color:#ddd;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;margin:0;padding:20px}
+        .card{background:#0a0a0a;padding:2rem;border-radius:24px;text-align:center;max-width:400px;border:1px solid #1a1a1a}
+        h2{font-size:1.5rem;margin-bottom:1rem;color:#e0e0e0}
+        img{max-width:100%;border-radius:16px;margin:1rem 0;border:1px solid #2a2a2a}
+        .countdown{color:#4ade80;margin-top:1rem}
       </style>
     </head>
     <body>
@@ -6209,7 +6334,17 @@ function qrCodePage(target, qrData, nonce) {
         <p>Or continue to website...</p>
         <div class="countdown">Redirecting in <span id="countdown">5</span> seconds</div>
       </div>
-      <script nonce="${nonce}">let time=5;const interval=setInterval(()=>{time--;document.getElementById('countdown').textContent=time;if(time<=0){clearInterval(interval);window.location.href='${target}'}},1000);</script>
+      <script nonce="${nonce}">
+        let time=5;
+        const interval=setInterval(()=>{
+          time--;
+          document.getElementById('countdown').textContent=time;
+          if(time<=0){
+            clearInterval(interval);
+            window.location.href='${target}';
+          }
+        },1000);
+      </script>
     </body>
     </html>
   `;
@@ -6886,69 +7021,78 @@ app.use((err, req, res, next) => {
   }
 });
 
-// Graceful Shutdown
+// ✅ FIXED GRACEFUL SHUTDOWN
 async function gracefulShutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully...`);
   
   const shutdownTimeout = setTimeout(() => {
-    logger.error('Forcing exit after timeout');
+    logger.error('Force shutdown after 30s timeout');
     process.exit(1);
   }, 30000);
   
   try {
-    server.close(() => {
-      logger.info('HTTP server closed');
+    // Close server with timeout
+    await new Promise((resolve) => {
+      const serverCloseTimeout = setTimeout(() => {
+        logger.warn('Server close timeout, forcing...');
+        resolve();
+      }, 10000);
+      
+      server.close(() => {
+        clearTimeout(serverCloseTimeout);
+        logger.info('HTTP server closed');
+        resolve();
+      });
     });
     
+    // Close Socket.IO
     await new Promise((resolve) => {
+      const ioCloseTimeout = setTimeout(() => {
+        logger.warn('Socket.IO close timeout');
+        resolve();
+      }, 5000);
+      
       io.close(() => {
+        clearTimeout(ioCloseTimeout);
         logger.info('Socket.IO closed');
         resolve();
       });
     });
     
-    const queueCloses = [];
-    if (redirectQueue) queueCloses.push(redirectQueue.close());
-    if (emailQueue) queueCloses.push(emailQueue.close());
-    if (analyticsQueue) queueCloses.push(analyticsQueue.close());
-    if (encodingQueue) queueCloses.push(encodingQueue.close());
+    // Clear all intervals
+    Object.values(global.intervals).forEach(interval => {
+      if (interval) clearInterval(interval);
+    });
+    logger.info('All intervals cleared');
     
+    // Close queues
+    const queueCloses = [];
+    [redirectQueue, emailQueue, analyticsQueue, encodingQueue].forEach(q => {
+      if (q) queueCloses.push(q.close().catch(e => logger.error('Queue close error:', e)));
+    });
     await Promise.all(queueCloses);
     logger.info('Queues closed');
     
+    // Close database
     if (dbPool) {
       await dbPool.end();
-      logger.info('Database pool closed');
-      
-      if (dbHealthCheck) {
-        clearInterval(dbHealthCheck);
-      }
+      if (dbHealthCheck) clearInterval(dbHealthCheck);
+      logger.info('Database closed');
     }
     
+    // Close Redis
     const redisCloses = [];
-    if (redisClient) redisCloses.push(redisClient.quit());
-    if (subscriber) redisCloses.push(subscriber.quit());
-    
+    if (redisClient) redisCloses.push(redisClient.quit().catch(e => logger.error('Redis quit error:', e)));
+    if (subscriber) redisCloses.push(subscriber.quit().catch(e => logger.error('Subscriber quit error:', e)));
     await Promise.all(redisCloses);
-    logger.info('Redis connections closed');
-    
-    const intervals = [
-      'dbHealthCheck',
-      'metricsUpdate',
-      'queueMetrics'
-    ];
-    
-    intervals.forEach(interval => {
-      if (global[interval]) {
-        clearInterval(global[interval]);
-      }
-    });
+    logger.info('Redis closed');
     
     clearTimeout(shutdownTimeout);
-    logger.info('Graceful shutdown completed');
+    logger.info('✅ Graceful shutdown completed');
     process.exit(0);
   } catch (err) {
-    logger.error('Error during shutdown:', err);
+    logger.error('Shutdown error:', err);
+    clearTimeout(shutdownTimeout);
     process.exit(1);
   }
 }
@@ -7024,7 +7168,6 @@ async function performBackup() {
 }
 
 // Start Server
-// ✅ Start Server - UPDATED WITH PROPER ERROR HANDLING
 async function startServer() {
   try {
     await ensureDirectories();
@@ -7047,7 +7190,7 @@ async function startServer() {
     }
     
     if (CONFIG.AUTO_BACKUP_ENABLED) {
-      setInterval(performBackup, CONFIG.AUTO_BACKUP_INTERVAL);
+      global.intervals.backup = setInterval(performBackup, CONFIG.AUTO_BACKUP_INTERVAL);
       performBackup();
     }
     
@@ -7088,7 +7231,7 @@ async function startServer() {
           console.log(`✅ SUCCESS! Server is running`);
           console.log('='.repeat(100));
           console.log(`📡 Listening on: http://${host === '0.0.0.0' ? 'localhost' : host}:${addr.port}`);
-          console.log(`🚀 Version: Redirector Pro v4.1.0 - Enterprise Edition - ULTIMATE`);
+          console.log(`🚀 Version: Redirector Pro v4.1.0 - Enterprise Edition`);
           console.log('='.repeat(100));
           console.log(`🔑 Metrics Key: ${METRICS_API_KEY.substring(0, 8)}...`);
           console.log(`⏱️  Link TTL: ${formatDuration(LINK_TTL_SEC)}`);
@@ -7126,7 +7269,7 @@ async function startServer() {
           fs.appendFile(REQUEST_LOG_FILE, JSON.stringify({
             timestamp: new Date().toISOString(),
             type: 'startup',
-            version: '4.1.0-ultimate',
+            version: '4.1.0',
             port: addr.port,
             host,
             nodeEnv: NODE_ENV,
@@ -7210,7 +7353,7 @@ setTimeout(() => {
   });
 }, 1000);
 
-// Server configuration (keep these as they are)
+// Server configuration
 server.keepAliveTimeout = CONFIG.KEEP_ALIVE_TIMEOUT;
 server.headersTimeout = CONFIG.HEADERS_TIMEOUT;
 server.maxHeadersCount = 1000;
