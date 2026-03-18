@@ -1,18 +1,22 @@
 {
   "name": "redirector-pro",
-  "version": "4.1.0",
-  "description": "Enterprise-grade URL redirector with advanced encoding, real-time monitoring, anti-bot protection, encryption key rotation, request signing, and comprehensive analytics",
+  "version": "4.2.0",
+  "description": "Enterprise-grade URL redirector with advanced encoding, real-time monitoring, anti-bot protection, encryption key rotation, request signing, comprehensive analytics, and memory leak detection",
   "main": "server.js",
   "scripts": {
     "prestart": "node generate-secrets.js --write",
-    "start": "node --max-old-space-size=512 server.js",
-    "dev": "nodemon --max-old-space-size=512 server.js",
-    "prod": "NODE_ENV=production node --max-old-space-size=512 server.js",
-    "debug": "node --inspect server.js",
-    "inspect": "node --inspect-brk server.js",
+    "start": "node --max-old-space-size=512 --expose-gc server.js",
+    "start:no-gc": "node --max-old-space-size=512 server.js",
+    "start:heapdump": "node --max-old-space-size=512 --heapsnapshot-signal=SIGUSR2 server.js",
+    "dev": "nodemon --max-old-space-size=512 --expose-gc server.js",
+    "prod": "NODE_ENV=production node --max-old-space-size=512 --expose-gc server.js",
+    "debug": "node --inspect --expose-gc server.js",
+    "inspect": "node --inspect-brk --expose-gc server.js",
+    "inspect:gc": "node --inspect --expose-gc server.js",
     
     "pm2": "pm2 start ecosystem.config.js",
-    "pm2:start": "pm2 start server.js --name redirector-pro --max-memory-restart 512M --instances max",
+    "pm2:start": "pm2 start server.js --name redirector-pro --max-memory-restart 512M --instances max --node-args=\"--expose-gc\"",
+    "pm2:start:gc": "pm2 start server.js --name redirector-pro --max-memory-restart 512M --instances max --node-args=\"--expose-gc\"",
     "pm2:stop": "pm2 stop redirector-pro",
     "pm2:restart": "pm2 restart redirector-pro",
     "pm2:delete": "pm2 delete redirector-pro",
@@ -54,6 +58,11 @@
     "clean:temp": "node scripts/clean-temp.js",
     "clean:keys": "node scripts/clean-expired-keys.js",
     "clean:all": "npm run clean:logs && npm run clean:cache && npm run clean:temp && npm run clean:keys",
+    "clean:memory": "node scripts/force-gc.js",
+    
+    "gc:force": "node scripts/force-gc.js",
+    "gc:stats": "node scripts/gc-stats.js",
+    "gc:monitor": "node scripts/gc-monitor.js",
     
     "test": "jest",
     "test:watch": "jest --watch",
@@ -69,6 +78,8 @@
     "test:encryption": "node tests/manual/encryption-test.js",
     "test:transactions": "node tests/manual/transaction-test.js",
     "test:versions": "node tests/manual/version-test.js",
+    "test:memory": "node tests/manual/memory-test.js",
+    "test:leak": "node tests/manual/leak-detection-test.js",
     
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -91,11 +102,14 @@
     "security:check": "snyk test",
     "security:signatures": "node scripts/verify-signatures.js",
     "security:keys:audit": "node scripts/audit-encryption-keys.js",
+    "security:memory": "node scripts/check-memory-leaks.js",
     
     "docker:build": "docker build -t redirector-pro .",
     "docker:build:no-cache": "docker build --no-cache -t redirector-pro .",
+    "docker:build:gc": "docker build --build-arg NODE_OPTIONS=\"--expose-gc\" -t redirector-pro .",
     "docker:run": "docker run -p 10000:10000 --env-file .env redirector-pro",
     "docker:run:dev": "docker run -p 10000:10000 -v $(pwd):/app -v /app/node_modules --env-file .env.dev redirector-pro",
+    "docker:run:gc": "docker run -p 10000:10000 --env-file .env -e NODE_OPTIONS=\"--expose-gc\" redirector-pro",
     "docker:compose": "docker-compose up -d",
     "docker:compose:build": "docker-compose up -d --build",
     "docker:compose:down": "docker-compose down",
@@ -109,15 +123,21 @@
     "health:encoding": "curl http://localhost:10000/health/encoding",
     "health:full": "curl http://localhost:10000/health/full -H 'Cookie: redirector.sid=$SESSION_ID'",
     "health:encryption": "curl http://localhost:10000/api/v2/health/encryption",
+    "health:memory": "curl http://localhost:10000/health/memory",
+    "health:gc": "curl http://localhost:10000/health/gc",
     "metrics": "curl -H 'X-API-Key: $METRICS_API_KEY' http://localhost:10000/metrics",
     "metrics:prom": "curl http://localhost:10000/metrics",
     "metrics:signatures": "curl http://localhost:10000/metrics | grep signature",
+    "metrics:memory": "curl http://localhost:10000/metrics | grep memory",
+    "metrics:gc": "curl http://localhost:10000/metrics | grep gc",
+    "metrics:leak": "curl http://localhost:10000/metrics | grep leak",
     
     "backup": "node scripts/backup.js",
     "backup:full": "node scripts/backup.js --full",
     "backup:config": "node scripts/backup.js --config",
     "backup:logs": "node scripts/backup.js --logs",
     "backup:keys": "node scripts/backup.js --keys",
+    "backup:heap": "node scripts/backup-heap.js",
     
     "restore": "node scripts/restore.js",
     "restore:latest": "node scripts/restore.js --latest",
@@ -129,14 +149,19 @@
     "analyze:performance": "node scripts/analyze-logs.js --type=performance",
     "analyze:encoding": "node scripts/analyze-logs.js --type=encoding",
     "analyze:signatures": "node scripts/analyze-logs.js --type=signatures",
+    "analyze:memory": "node scripts/analyze-logs.js --type=memory",
+    "analyze:heapdump": "node scripts/analyze-heapdump.js",
     
     "monitor": "node scripts/monitor.js",
     "monitor:realtime": "node scripts/monitor.js --realtime",
     "monitor:alerts": "node scripts/monitor.js --alerts",
     "monitor:keys": "node scripts/monitor.js --keys",
+    "monitor:memory": "node scripts/monitor.js --memory",
+    "monitor:gc": "node scripts/monitor.js --gc",
     
     "cache:clear": "node scripts/clear-cache.js",
     "cache:stats": "node scripts/cache-stats.js",
+    "cache:optimize": "node scripts/optimize-cache.js",
     
     "queue:clear": "node scripts/clear-queues.js",
     "queue:stats": "node scripts/queue-stats.js",
@@ -148,26 +173,32 @@
     "validate:env": "node scripts/validate-env.js",
     "validate:config": "node scripts/validate-config.js",
     "validate:signatures": "node scripts/validate-signatures.js",
+    "validate:memory": "node scripts/validate-memory.js",
     
     "generate:qrcode": "node scripts/generate-qrcode.js",
     "generate:test-links": "node scripts/generate-test-links.js",
     "generate:signature": "node scripts/generate-signature.js",
     "generate:api-key": "node scripts/generate-api-key.js",
+    "generate:heapdump": "node scripts/generate-heapdump.js",
     
     "report": "node scripts/generate-report.js",
     "report:daily": "node scripts/generate-report.js --period=daily",
     "report:weekly": "node scripts/generate-report.js --period=weekly",
     "report:monthly": "node scripts/generate-report.js --period=monthly",
     "report:security": "node scripts/generate-report.js --type=security",
+    "report:memory": "node scripts/generate-report.js --type=memory",
     
     "notify:slack": "node scripts/notify-slack.js",
     "notify:email": "node scripts/notify-email.js",
     "notify:webhook": "node scripts/notify-webhook.js",
+    "notify:memory": "node scripts/notify-memory.js",
     
     "maintenance": "node scripts/maintenance.js",
     "maintenance:optimize": "node scripts/maintenance.js --optimize",
     "maintenance:cleanup": "node scripts/maintenance.js --cleanup",
     "maintenance:keys": "node scripts/maintenance.js --keys",
+    "maintenance:memory": "node scripts/maintenance.js --memory",
+    "maintenance:gc": "node scripts/maintenance.js --gc",
     
     "init": "npm install && npm run db:setup && npm run secrets:write && npm run keys:init",
     "reset": "npm run clean:all && npm run db:reset && npm run secrets:force && npm run keys:init",
@@ -185,28 +216,55 @@
     "benchmark:signatures": "node scripts/benchmark-signatures.js",
     "benchmark:encryption": "node scripts/benchmark-encryption.js",
     "benchmark:transactions": "node scripts/benchmark-transactions.js",
+    "benchmark:memory": "node scripts/benchmark-memory.js",
+    "benchmark:gc": "node scripts/benchmark-gc.js",
     
-    "profile": "node --prof server.js",
+    "profile": "node --prof --expose-gc server.js",
     "profile:analyze": "node --prof-process isolate-*.log > profile.txt",
+    "profile:heap": "node --heap-prof --expose-gc server.js",
+    "profile:gc": "node --trace-gc --expose-gc server.js > gc-trace.log",
     
     "cluster": "node cluster.js",
     "cluster:start": "pm2 start cluster.js -i max",
+    "cluster:gc": "pm2 start cluster.js -i max --node-args=\"--expose-gc\"",
     
     "env:example": "cp .env.example .env",
     "env:validate": "node scripts/validate-env.js --strict",
+    "env:memory": "node scripts/check-memory-env.js",
     
     "api:v1:test": "curl -X POST http://localhost:10000/api/v1/generate -H 'Content-Type: application/json' -d '{\"url\":\"https://example.com\"}'",
     "api:v2:test": "node scripts/test-v2-api.js",
     "api:versions": "curl http://localhost:10000/api/versions",
+    "api:memory": "curl http://localhost:10000/api/memory-stats",
     
     "diagnose": "node diagnose.js",
     "diagnose:full": "node diagnose.js && npm run health",
-    "start:fixed": "node --max-old-space-size=512 server.js",
-    "start:verbose": "node --trace-warnings --max-old-space-size=512 server.js",
+    "diagnose:memory": "node scripts/diagnose-memory.js",
+    "diagnose:leak": "node scripts/diagnose-leak.js",
+    
+    "start:fixed": "node --max-old-space-size=512 --expose-gc server.js",
+    "start:verbose": "node --trace-warnings --max-old-space-size=512 --expose-gc server.js",
     "start:render": "node server.js",
-    "start:debug": "node --inspect --max-old-space-size=512 server.js",
+    "start:debug": "node --inspect --max-old-space-size=512 --expose-gc server.js",
+    "start:gc-debug": "node --trace-gc --expose-gc --max-old-space-size=512 server.js",
+    "start:heap-stats": "node --heap-stats --expose-gc server.js",
+    
     "render:start": "node render-start.js",
-    "port:check": "node -e \"require('http').createServer().listen(process.env.PORT || 10000, '0.0.0.0', () => { console.log('✅ Port ' + (process.env.PORT || 10000) + ' is available'); process.exit(); }).on('error', (e) => { console.error('❌ Port ' + (process.env.PORT || 10000) + ' is in use:', e.message); process.exit(1); })\""
+    "render:start:gc": "node --expose-gc render-start.js",
+    
+    "port:check": "node -e \"require('http').createServer().listen(process.env.PORT || 10000, '0.0.0.0', () => { console.log('✅ Port ' + (process.env.PORT || 10000) + ' is available'); process.exit(); }).on('error', (e) => { console.error('❌ Port ' + (process.env.PORT || 10000) + ' is in use:', e.message); process.exit(1); })\"",
+    
+    "memory:check": "node scripts/check-memory.js",
+    "memory:snapshot": "node scripts/take-snapshot.js",
+    "memory:analyze": "node scripts/analyze-snapshot.js",
+    "memory:clear": "node scripts/clear-memory.js",
+    "memory:optimize": "node scripts/optimize-memory.js",
+    "memory:leak:detect": "node scripts/detect-leaks.js",
+    "memory:leak:fix": "node scripts/fix-leaks.js",
+    
+    "gc:status": "node -e \"console.log('GC Available:', typeof global.gc !== 'undefined' ? '✅ Yes' : '❌ No (run with --expose-gc)')\"",
+    "gc:trigger": "node scripts/trigger-gc.js",
+    "gc:stats:live": "node scripts/live-gc-stats.js"
   },
   "keywords": [
     "redirect", 
@@ -236,7 +294,11 @@
     "prometheus",
     "socket-io",
     "api-versioning",
-    "database-transactions"
+    "database-transactions",
+    "memory-leak-detection",
+    "garbage-collection",
+    "heap-dump",
+    "memory-optimization"
   ],
   "author": "",
   "license": "MIT",
@@ -402,7 +464,8 @@
     "ext": "js,json",
     "env": {
       "NODE_ENV": "development"
-    }
+    },
+    "exec": "node --expose-gc server.js"
   },
   "prettier": {
     "singleQuote": true,
@@ -440,5 +503,8 @@
       "class-methods-use-this": "off",
       "import/no-extraneous-dependencies": ["error", { "devDependencies": ["**/tests/**/*.js", "**/scripts/**/*.js", "**/generate-secrets.js"] }]
     }
+  },
+  "overrides": {
+    "jose": "^4.15.4"
   }
 }
