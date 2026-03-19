@@ -222,10 +222,10 @@ const configSchema = Joi.object({
   CIRCUIT_BREAKER_RESET_TIMEOUT: Joi.number().default(30000),
   
   // Monitoring
-  MEMORY_THRESHOLD_WARNING: Joi.number().default(0.85), // Increased to 85%
-  MEMORY_THRESHOLD_CRITICAL: Joi.number().default(0.95), // 95%
-  CPU_THRESHOLD_WARNING: Joi.number().default(0.5), // 50% - reduced threshold
-  CPU_THRESHOLD_CRITICAL: Joi.number().default(0.8), // 80% - reduced threshold
+  MEMORY_THRESHOLD_WARNING: Joi.number().default(0.85),
+  MEMORY_THRESHOLD_CRITICAL: Joi.number().default(0.95),
+  CPU_THRESHOLD_WARNING: Joi.number().default(0.5),
+  CPU_THRESHOLD_CRITICAL: Joi.number().default(0.8),
   
   // Backup
   AUTO_BACKUP_ENABLED: Joi.boolean().default(true),
@@ -266,9 +266,8 @@ CONFIG.BLOCKED_DOMAINS = CONFIG.BLOCKED_DOMAINS ? CONFIG.BLOCKED_DOMAINS.split('
 CONFIG.SUPPORTED_API_VERSIONS = CONFIG.SUPPORTED_API_VERSIONS ? 
   CONFIG.SUPPORTED_API_VERSIONS.split(',').map(v => v.trim()) : ['v1', 'v2'];
 
-// ==================== MISSING FUNCTIONS - ADDED HERE ====================
-
-// ✅ URL VALIDATION FUNCTION
+// ==================== URL VALIDATION FUNCTION ====================
+// ✅ MOVED TO TOP - CRITICAL FIX
 function validateUrl(url) {
   try {
     const urlObj = new URL(url);
@@ -316,7 +315,8 @@ global.intervals = {
   keyRotationCheck: null,
   backup: null,
   cacheCleanup: null,
-  memLeakDetection: null
+  memLeakDetection: null,
+  healthCheck: null
 };
 
 // Allow runtime config reload
@@ -425,13 +425,13 @@ const logger = createLogger({
   defaultMeta: { 
     service: 'redirector-pro',
     environment: CONFIG.NODE_ENV,
-    version: '4.2.0' // Upgraded version
+    version: '4.2.0'
   },
   transports: logTransports,
   exceptionHandlers: [
     new transports.File({ 
       filename: path.join(logDir, 'exceptions.log'),
-      maxsize: 10485760, // 10MB
+      maxsize: 10485760,
       maxFiles: 5
     })
   ],
@@ -444,6 +444,276 @@ const logger = createLogger({
   ],
   exitOnError: false
 });
+
+// ==================== REQUEST TIMEOUT MIDDLEWARE ====================
+const requestTimeout = (timeout = 30000) => {
+  return (req, res, next) => {
+    const timer = setTimeout(() => {
+      logger.error('Request timeout', {
+        id: req.id,
+        path: req.path,
+        method: req.method,
+        timeout
+      });
+      
+      if (!res.headersSent) {
+        res.status(503).json({
+          error: 'Request timeout',
+          code: 'REQUEST_TIMEOUT',
+          id: req.id
+        });
+      }
+    }, timeout);
+    
+    res.on('finish', () => clearTimeout(timer));
+    res.on('close', () => clearTimeout(timer));
+    
+    next();
+  };
+};
+
+// ==================== ENHANCED MEMORY LEAK DETECTOR ====================
+class MemoryLeakDetector {
+  constructor(options = {}) {
+    this.snapshots = [];
+    this.maxSnapshots = options.maxSnapshots || 20;
+    this.growthThreshold = options.growthThreshold || 10; // MB per minute
+    this.checkInterval = options.checkInterval || 60000; // 1 minute
+    this.heapdumpEnabled = options.heapdumpEnabled || false;
+    this.autoGC = options.autoGC || true;
+    this.cacheClearThreshold = options.cacheClearThreshold || 0.8; // 80% of max
+  }
+
+  takeSnapshot() {
+    const mem = process.memoryUsage();
+    const snapshot = {
+      timestamp: Date.now(),
+      heapUsed: mem.heapUsed,
+      heapTotal: mem.heapTotal,
+      external: mem.external,
+      rss: mem.rss,
+      arrayBuffers: mem.arrayBuffers || 0
+    };
+    
+    this.snapshots.push(snapshot);
+    if (this.snapshots.length > this.maxSnapshots) {
+      this.snapshots.shift();
+    }
+    
+    return this.analyze();
+  }
+
+  analyze() {
+    if (this.snapshots.length < 5) return null;
+    
+    const oldest = this.snapshots[0];
+    const newest = this.snapshots[this.snapshots.length - 1];
+    const timeDiff = (newest.timestamp - oldest.timestamp) / 1000 / 60; // minutes
+    const heapGrowth = (newest.heapUsed - oldest.heapUsed) / 1024 / 1024; // MB
+    
+    const growthRate = heapGrowth / timeDiff; // MB per minute
+    
+    // Calculate moving average of last 3 snapshots
+    const recentSnapshots = this.snapshots.slice(-3);
+    const avgRecentGrowth = recentSnapshots.reduce((sum, s, i, arr) => {
+      if (i === 0) return sum;
+      const prev = arr[i-1];
+      const growth = (s.heapUsed - prev.heapUsed) / 1024 / 1024;
+      return sum + growth;
+    }, 0) / (recentSnapshots.length - 1);
+    
+    return {
+      totalGrowth: heapGrowth,
+      growthRate,
+      avgRecentGrowth,
+      timeMinutes: timeDiff,
+      currentHeap: newest.heapUsed / 1024 / 1024,
+      heapPercent: newest.heapUsed / newest.heapTotal,
+      detected: growthRate > this.growthThreshold,
+      severity: growthRate > this.growthThreshold * 2 ? 'critical' : 
+                growthRate > this.growthThreshold ? 'warning' : 'normal'
+    };
+  }
+
+  shouldTakeAction(analysis) {
+    if (!analysis) return false;
+    
+    return analysis.detected || 
+           analysis.heapPercent > 0.9 || // 90% heap usage
+           analysis.currentHeap > 500; // >500MB heap
+  }
+
+  getRecommendedActions(analysis) {
+    const actions = [];
+    
+    if (!analysis) return actions;
+    
+    if (analysis.heapPercent > 0.95) {
+      actions.push('IMMEDIATE_GC');
+    }
+    
+    if (analysis.growthRate > this.growthThreshold * 3) {
+      actions.push('CLEAR_ALL_CACHES');
+    } else if (analysis.growthRate > this.growthThreshold) {
+      actions.push('CLEAR_VOLATILE_CACHES');
+    }
+    
+    if (analysis.severity === 'critical') {
+      actions.push('TAKE_HEAPDUMP');
+      actions.push('SCALE_UP');
+    }
+    
+    return actions;
+  }
+}
+
+// ==================== DATABASE MANAGER ====================
+class DatabaseManager {
+  constructor(pool, options = {}) {
+    this.pool = pool;
+    this.options = {
+      healthCheckInterval: options.healthCheckInterval || 30000,
+      maxRetries: options.maxRetries || 5,
+      retryDelay: options.retryDelay || 1000,
+      poolOptions: options.poolOptions || {},
+      ...options
+    };
+    
+    this.isConnected = false;
+    this.retryCount = 0;
+    this.healthCheckTimer = null;
+    this.reconnectTimer = null;
+  }
+
+  async initialize() {
+    await this.testConnection();
+    this.startHealthCheck();
+  }
+
+  async testConnection() {
+    try {
+      const result = await this.pool.query('SELECT 1');
+      this.isConnected = true;
+      this.retryCount = 0;
+      logger.info('Database connection healthy');
+      return true;
+    } catch (err) {
+      this.isConnected = false;
+      logger.error('Database connection failed:', err);
+      return false;
+    }
+  }
+
+  startHealthCheck() {
+    this.healthCheckTimer = setInterval(async () => {
+      const wasConnected = this.isConnected;
+      const isConnected = await this.testConnection();
+      
+      if (!wasConnected && isConnected) {
+        logger.info('Database connection restored');
+        this.retryCount = 0;
+      }
+      
+      if (!isConnected) {
+        this.retryCount++;
+        logger.warn(`Database health check failed (attempt ${this.retryCount})`);
+        
+        if (this.retryCount >= this.options.maxRetries) {
+          this.attemptReconnection();
+        }
+      }
+    }, this.options.healthCheckInterval);
+  }
+
+  async attemptReconnection() {
+    logger.info('Attempting database reconnection...');
+    
+    try {
+      await this.pool.end();
+      // Recreate pool
+      this.pool = new Pool({
+        connectionString: CONFIG.DATABASE_URL,
+        ...this.options.poolOptions
+      });
+      
+      await this.testConnection();
+      logger.info('Database reconnection successful');
+    } catch (err) {
+      logger.error('Database reconnection failed:', err);
+      
+      // Schedule next attempt with exponential backoff
+      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(() => {
+        this.attemptReconnection();
+      }, this.options.retryDelay * Math.pow(2, Math.min(this.retryCount, 5)));
+    }
+  }
+
+  async shutdown() {
+    if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    await this.pool.end();
+  }
+}
+
+// ==================== CIRCUIT BREAKER MONITOR ====================
+class CircuitBreakerMonitor {
+  constructor() {
+    this.breakers = new Map();
+    this.metrics = {
+      opens: 0,
+      closes: 0,
+      rejects: 0,
+      timeouts: 0
+    };
+  }
+
+  register(name, breaker) {
+    this.breakers.set(name, breaker);
+    
+    breaker.on('open', () => {
+      this.metrics.opens++;
+      logger.warn(`Circuit breaker ${name} opened`);
+    });
+    
+    breaker.on('close', () => {
+      this.metrics.closes++;
+      logger.info(`Circuit breaker ${name} closed`);
+    });
+    
+    breaker.on('reject', () => {
+      this.metrics.rejects++;
+    });
+    
+    breaker.on('timeout', () => {
+      this.metrics.timeouts++;
+    });
+    
+    breaker.on('halfOpen', () => {
+      logger.info(`Circuit breaker ${name} half-open`);
+    });
+  }
+
+  getStatus() {
+    const status = {};
+    for (const [name, breaker] of this.breakers) {
+      status[name] = {
+        state: breaker.opened ? 'open' : breaker.halfOpen ? 'half-open' : 'closed',
+        stats: breaker.stats,
+        pending: breaker.pending,
+        enabled: breaker.enabled
+      };
+    }
+    return status;
+  }
+
+  getMetrics() {
+    return {
+      ...this.metrics,
+      breakers: this.breakers.size
+    };
+  }
+}
 
 // ─── Prometheus Metrics with Custom Registry ───────────────────────────────
 const register = new promClient.Registry();
@@ -584,6 +854,13 @@ const memoryLeakDetected = new promClient.Gauge({
   registers: [register]
 });
 
+const circuitBreakerMetrics = new promClient.Gauge({
+  name: `${CONFIG.METRICS_PREFIX}circuit_breaker_state`,
+  help: 'Circuit breaker state (0=closed, 1=half-open, 2=open)',
+  labelNames: ['breaker'],
+  registers: [register]
+});
+
 const businessMetrics = {
   linkCreationRate: new promClient.Gauge({
     name: `${CONFIG.METRICS_PREFIX}link_creation_rate`,
@@ -628,12 +905,11 @@ asyncHook.enable();
 const app = express();
 const server = http.createServer(app);
 
-// ─── Add server event listeners for debugging ───────────────────────────────
+// Add server event listeners for debugging
 server.on('listening', () => {
   const addr = server.address();
   console.log(`✅ SERVER LISTENING ON ${addr.address}:${addr.port}`);
   console.log(`🔍 Process ID: ${process.pid}`);
-  console.log(`🔍 Environment PORT: ${process.env.PORT}`);
 });
 
 server.on('error', (err) => {
@@ -655,6 +931,9 @@ const circuitBreakerOptions = {
   volumeThreshold: 10
 };
 
+// Initialize circuit breaker monitor
+const breakerMonitor = new CircuitBreakerMonitor();
+
 // ─── Redis Connection with Advanced Configuration ──────────────────────────
 let redisClient;
 let subscriber;
@@ -669,7 +948,7 @@ if (CONFIG.REDIS_URL && CONFIG.REDIS_URL.startsWith('redis://') && CONFIG.REDIS_
         const delay = Math.min(times * 100, 3000);
         if (times > 10) {
           logger.warn(`Redis connection retry ${times} - stopping retries`);
-          return null; // Stop retrying after 10 attempts
+          return null;
         }
         logger.warn(`Redis connection retry ${times} with delay ${delay}ms`);
         return delay;
@@ -778,6 +1057,20 @@ const encodingBreaker = new circuitBreaker(async (target, req, options) => {
   return await generateLongLink(target, req, options);
 }, { ...circuitBreakerOptions, name: 'encoding', timeout: 10000 });
 
+// Register circuit breakers with monitor
+breakerMonitor.register('database', databaseBreaker);
+breakerMonitor.register('redis', redisBreaker);
+breakerMonitor.register('encoding', encodingBreaker);
+
+// Update circuit breaker metrics
+setInterval(() => {
+  const status = breakerMonitor.getStatus();
+  Object.entries(status).forEach(([name, data]) => {
+    const stateValue = data.state === 'closed' ? 0 : data.state === 'half-open' ? 1 : 2;
+    circuitBreakerMetrics.labels(name).set(stateValue);
+  });
+}, 5000);
+
 // ✅ RATE LIMITER MIDDLEWARE
 const rateLimiterMiddleware = (req, res, next) => {
   const key = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
@@ -876,7 +1169,7 @@ if (redisClient) {
     logger.error('Redirect job failed', { jobId: job.id, error: err.message });
   });
 
-  // Queue processors with error handling
+  // Queue processors
   redirectQueue.process(async (job) => {
     const { linkId, ip, userAgent, deviceInfo, country, linkMode, encodingLayers } = job.data;
     
@@ -923,10 +1216,8 @@ if (redisClient) {
     }
     
     try {
-      // Implement actual email sending here
       logger.info(`Email would be sent to ${to} with subject: ${subject}`);
       
-      // Log email in database
       if (dbPool) {
         await queryWithTimeout(
           'INSERT INTO emails (recipient, subject, type, status) VALUES ($1, $2, $3, $4)',
@@ -947,7 +1238,6 @@ if (redisClient) {
     try {
       await updateAnalytics(type, data);
       
-      // Update business metrics
       if (type === 'generate') {
         businessMetrics.linkCreationRate.labels(data.mode || 'short').inc();
       } else if (type === 'bot') {
@@ -1043,12 +1333,11 @@ class EncryptionKeyManager {
     this.keyHistory = new Keyv({
       store: new KeyvFile({ 
         filename: path.join(CONFIG.ENCRYPTION_KEY_STORAGE_PATH, 'keys.json'),
-        expiredCheckDelay: 24 * 60 * 60 * 1000 // Check once per day
+        expiredCheckDelay: 24 * 60 * 60 * 1000
       })
     });
     this.initialized = false;
     
-    // Ensure key storage directory exists
     this.ensureStorageDirectory();
   }
 
@@ -1062,7 +1351,6 @@ class EncryptionKeyManager {
 
   async initialize() {
     try {
-      // Load key history
       const savedKeys = await this.keyHistory.get('encryption_keys') || [];
       
       if (savedKeys.length > 0) {
@@ -1075,7 +1363,6 @@ class EncryptionKeyManager {
           });
         });
         
-        // Set current key to the most recent valid key
         const validKeys = Array.from(this.keys.values())
           .filter(k => k.expiresAt > new Date())
           .sort((a, b) => b.createdAt - a.createdAt);
@@ -1087,12 +1374,10 @@ class EncryptionKeyManager {
         }
       }
 
-      // Generate initial key if none exists
       if (!this.currentKeyId) {
         await this.generateNewKey();
       }
 
-      // Start rotation scheduler
       this.startRotationScheduler();
       
       this.initialized = true;
@@ -1109,7 +1394,7 @@ class EncryptionKeyManager {
 
   async generateNewKey() {
     const keyId = uuidv4();
-    const key = crypto.randomBytes(32); // 256-bit key
+    const key = crypto.randomBytes(32);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.rotationInterval);
 
@@ -1128,7 +1413,6 @@ class EncryptionKeyManager {
       version: keyData.version
     });
 
-    // Save to persistent storage
     const savedKeys = await this.keyHistory.get('encryption_keys') || [];
     savedKeys.push(keyData);
     await this.keyHistory.set('encryption_keys', savedKeys);
@@ -1151,7 +1435,7 @@ class EncryptionKeyManager {
       } catch (err) {
         logger.error('Key rotation error:', err);
       }
-    }, 24 * 60 * 60 * 1000); // Check daily
+    }, 24 * 60 * 60 * 1000);
   }
 
   async rotateKeyIfNeeded() {
@@ -1165,7 +1449,6 @@ class EncryptionKeyManager {
     const now = new Date();
     const daysUntilExpiry = (currentKey.expiresAt - now) / (24 * 60 * 60 * 1000);
 
-    // Rotate if less than 1 day until expiry
     if (daysUntilExpiry < 1) {
       logger.info('Rotating encryption key', {
         currentKey: this.currentKeyId,
@@ -1229,10 +1512,7 @@ class EncryptionKeyManager {
   }
 
   async reencryptData(oldData, oldKeyId) {
-    // Decrypt with old key
     const decrypted = this.decrypt(oldData);
-    
-    // Encrypt with new key
     return this.encrypt(decrypted);
   }
 
@@ -1282,7 +1562,7 @@ class EncryptionKeyManager {
   }
 }
 
-// Initialize key manager (will be done after logger is ready)
+// Initialize key manager
 let keyManager;
 
 // ─── REQUEST SIGNING SYSTEM ──────────────────────────────────────────────
@@ -1291,7 +1571,7 @@ class RequestSigner {
   constructor(secretKey, options = {}) {
     this.secretKey = secretKey;
     this.options = {
-      expiryTime: CONFIG.REQUEST_SIGNING_EXPIRY || 300000, // 5 minutes
+      expiryTime: CONFIG.REQUEST_SIGNING_EXPIRY || 300000,
       algorithm: 'sha256',
       headerPrefix: 'v1',
       requiredPaths: ['/api/v2/generate', '/api/v2/bulk', '/api/settings'],
@@ -1325,13 +1605,11 @@ class RequestSigner {
       nonce
     );
 
-    // Add signature headers
     res.setHeader('X-Signature', signature);
     res.setHeader('X-Timestamp', timestamp);
     res.setHeader('X-Nonce', nonce);
     res.setHeader('X-Signature-Version', this.options.headerPrefix);
 
-    // Store in request for later verification if needed
     req.signature = {
       timestamp,
       nonce,
@@ -1342,7 +1620,6 @@ class RequestSigner {
   }
 
   verifySignature(req, res, next) {
-    // Skip for non-modifying requests
     if (req.method === 'GET' && !this.options.requiredPaths.includes(req.path)) {
       return next();
     }
@@ -1352,18 +1629,15 @@ class RequestSigner {
     const nonce = req.headers['x-nonce'];
     const version = req.headers['x-signature-version'];
 
-    // Validate required headers
     if (!signature || !timestamp || !nonce) {
       logger.warn('Missing signature headers', {
         ip: req.ip,
-        path: req.path,
-        headers: Object.keys(req.headers)
+        path: req.path
       });
       signatureValidationCounter.labels('missing_headers').inc();
       throw new AppError('Missing request signature', 401, 'MISSING_SIGNATURE');
     }
 
-    // Check timestamp freshness
     const requestTime = parseInt(timestamp);
     const now = Date.now();
     if (Math.abs(now - requestTime) > this.options.expiryTime) {
@@ -1376,7 +1650,6 @@ class RequestSigner {
       throw new AppError('Request expired', 401, 'REQUEST_EXPIRED');
     }
 
-    // Check nonce uniqueness (prevent replay attacks)
     const nonceKey = `nonce:${nonce}`;
     if (cacheGet(linkRequestCache, 'nonce', nonceKey)) {
       logger.warn('Duplicate nonce detected', {
@@ -1388,10 +1661,8 @@ class RequestSigner {
       throw new AppError('Invalid request nonce', 401, 'INVALID_NONCE');
     }
     
-    // Store nonce for expiry time
     cacheSet(linkRequestCache, 'nonce', nonceKey, true, Math.ceil(this.options.expiryTime / 1000));
 
-    // Verify signature
     const expectedSignature = this.generateSignature(
       req.method,
       req.originalUrl || req.url,
@@ -1406,9 +1677,7 @@ class RequestSigner {
     )) {
       logger.warn('Invalid signature', {
         ip: req.ip,
-        path: req.path,
-        provided: signature.substring(0, 8),
-        expected: expectedSignature.substring(0, 8)
+        path: req.path
       });
       signatureValidationCounter.labels('invalid').inc();
       throw new AppError('Invalid request signature', 401, 'INVALID_SIGNATURE');
@@ -1418,7 +1687,6 @@ class RequestSigner {
     next();
   }
 
-  // Middleware to require signatures for specific paths
   requireSignature(paths = []) {
     return (req, res, next) => {
       const shouldVerify = paths.some(path => {
@@ -1448,7 +1716,6 @@ class InputValidator {
   }
 
   registerDefaultSchemas() {
-    // Link generation schema
     this.schemas.set('generateLink', Joi.object({
       url: Joi.string()
         .custom(this.validateUrl, 'URL validation')
@@ -1482,7 +1749,6 @@ class InputValidator {
       }).default({})
     }));
 
-    // Admin settings schema
     this.schemas.set('adminSettings', Joi.object({
       linkLengthMode: Joi.string().valid('short', 'long', 'auto'),
       allowLinkModeSwitch: Joi.boolean(),
@@ -1495,7 +1761,6 @@ class InputValidator {
       encodingComplexityThreshold: Joi.number().integer().min(10).max(100)
     }));
 
-    // IP whitelist schema
     this.schemas.set('ipWhitelist', Joi.object({
       ips: Joi.array().items(
         Joi.string().ip({
@@ -1505,7 +1770,6 @@ class InputValidator {
       ).min(0).max(1000)
     }));
 
-    // Bulk link generation schema
     this.schemas.set('bulkLinks', Joi.object({
       links: Joi.array().items(
         Joi.object({
@@ -1519,13 +1783,12 @@ class InputValidator {
       ).min(1).max(100)
     }));
 
-    // API key creation schema
     this.schemas.set('apiKey', Joi.object({
       name: Joi.string().min(3).max(50).required(),
       permissions: Joi.array().items(
         Joi.string().valid('read', 'write', 'admin', 'metrics')
       ).default(['read']),
-      expiresIn: Joi.number().integer().min(1).max(365).default(30) // days
+      expiresIn: Joi.number().integer().min(1).max(365).default(30)
     }));
   }
 
@@ -1533,12 +1796,10 @@ class InputValidator {
     try {
       const url = new URL(value);
       
-      // Validate protocol
       if (!['http:', 'https:'].includes(url.protocol)) {
         return helpers.error('any.invalid', { message: 'Only HTTP and HTTPS protocols are allowed' });
       }
 
-      // Block internal/local URLs
       const hostname = url.hostname.toLowerCase();
       
       const isInternal = CONFIG.BLOCKED_DOMAINS.some(blocked => 
@@ -1549,7 +1810,6 @@ class InputValidator {
         return helpers.error('any.invalid', { message: 'Internal URLs are not allowed' });
       }
 
-      // Check for private IP ranges
       const ipPatterns = [
         /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,
         /^172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}$/,
@@ -1671,18 +1931,14 @@ class TransactionManager {
     try {
       await client.query('BEGIN');
       
-      // Set isolation level
       await client.query(`SET TRANSACTION ISOLATION LEVEL ${isolationLevel}`);
       
-      // Set read-only if needed
       if (readOnly) {
         await client.query('SET TRANSACTION READ ONLY');
       }
       
-      // Set statement timeout
       await client.query(`SET LOCAL statement_timeout = ${timeout}`);
 
-      // Execute the transaction
       const result = await callback(client);
 
       await client.query('COMMIT');
@@ -1735,7 +1991,6 @@ class TransactionManager {
       } catch (err) {
         lastError = err;
         
-        // Only retry on serialization errors
         if (!this.isRetryableError(err)) {
           throw err;
         }
@@ -1744,7 +1999,6 @@ class TransactionManager {
           throw new Error(`Transaction failed after ${maxRetries} attempts: ${err.message}`);
         }
 
-        // Calculate delay
         let delay = retryDelay;
         if (backoff === 'exponential') {
           delay = retryDelay * Math.pow(2, attempt - 1);
@@ -1762,12 +2016,11 @@ class TransactionManager {
   }
 
   isRetryableError(err) {
-    // PostgreSQL error codes that are safe to retry
     const retryableCodes = [
-      '40001', // serialization_failure
-      '40P01', // deadlock_detected
-      '55P03', // lock_not_available
-      '57P01'  // admin_shutdown
+      '40001',
+      '40P01',
+      '55P03',
+      '57P01'
     ];
 
     return retryableCodes.includes(err.code);
@@ -1812,10 +2065,8 @@ class APIVersionManager {
 
   versionMiddleware(options = {}) {
     return (req, res, next) => {
-      // Determine requested version
       let requestedVersion = this.getRequestedVersion(req);
 
-      // Validate version
       if (!this.isVersionSupported(requestedVersion)) {
         if (options.strict || CONFIG.API_VERSION_STRICT) {
           throw new AppError(`Unsupported API version: ${requestedVersion}`, 400, 'UNSUPPORTED_VERSION');
@@ -1823,7 +2074,6 @@ class APIVersionManager {
         requestedVersion = this.defaultVersion;
       }
 
-      // Check if version is deprecated
       const versionInfo = this.versions.get(requestedVersion);
       if (versionInfo?.deprecated) {
         res.setHeader('X-API-Deprecated', 'true');
@@ -1840,35 +2090,29 @@ class APIVersionManager {
         }
       }
 
-      // Attach version info to request
       req.apiVersion = requestedVersion;
       req.apiVersionInfo = versionInfo;
 
-      // Apply version-specific middleware
       const middlewares = this.middlewares.get(requestedVersion) || [];
       this.applyMiddlewares(req, res, middlewares, next);
     };
   }
 
   getRequestedVersion(req) {
-    // Check Accept header
     const acceptHeader = req.headers.accept || '';
     const versionMatch = acceptHeader.match(/version=([^;,\s]+)/);
     if (versionMatch) {
       return versionMatch[1];
     }
 
-    // Check custom header
     if (req.headers['x-api-version']) {
       return req.headers['x-api-version'];
     }
 
-    // Check query parameter
     if (req.query.api_version) {
       return req.query.api_version;
     }
 
-    // Default to latest
     return this.getLatestVersion();
   }
 
@@ -1930,6 +2174,7 @@ class APIVersionManager {
 let dbPool;
 let dbHealthCheck;
 let txManager;
+let dbManager;
 
 const queryWithTimeout = async (query, params, options = {}) => {
   if (!dbPool) {
@@ -1940,7 +2185,6 @@ const queryWithTimeout = async (query, params, options = {}) => {
   const timeout = options.timeout || CONFIG.DB_QUERY_TIMEOUT;
   
   try {
-    // Set statement timeout for this query
     await client.query(`SET LOCAL statement_timeout = ${timeout}`);
     
     const result = await Promise.race([
@@ -1973,8 +2217,16 @@ if (CONFIG.DATABASE_URL && CONFIG.DATABASE_URL.startsWith('postgresql://')) {
       allowExitOnIdle: true
     });
 
-    // Initialize transaction manager
     txManager = new TransactionManager(dbPool);
+    dbManager = new DatabaseManager(dbPool, {
+      healthCheckInterval: CONFIG.HEALTH_CHECK_INTERVAL,
+      maxRetries: 5,
+      retryDelay: 1000,
+      poolOptions: {
+        max: CONFIG.DB_POOL_MAX,
+        min: CONFIG.DB_POOL_MIN
+      }
+    });
 
     dbPool.on('error', (err) => {
       logger.error('Unexpected database error:', err);
@@ -1992,15 +2244,12 @@ if (CONFIG.DATABASE_URL && CONFIG.DATABASE_URL.startsWith('postgresql://')) {
       databaseConnectionGauge.labels('removed').inc();
     });
 
-    // Create tables with proper schema and error handling
     const createTables = async () => {
       try {
         logger.info('📦 Creating database tables...');
         
-        // Enable UUID extension
         await queryWithTimeout('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
         
-        // Create tables with proper constraints
         const tables = [
           `CREATE TABLE IF NOT EXISTS links (
             id VARCHAR(64) PRIMARY KEY,
@@ -2147,7 +2396,6 @@ if (CONFIG.DATABASE_URL && CONFIG.DATABASE_URL.startsWith('postgresql://')) {
 
         logger.info('✅ Tables created successfully');
 
-        // Create indexes for performance
         const indexes = [
           { name: 'idx_links_expires', query: 'CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at) WHERE status = \'active\';' },
           { name: 'idx_links_status', query: 'CREATE INDEX IF NOT EXISTS idx_links_status ON links(status);' },
@@ -2183,17 +2431,14 @@ if (CONFIG.DATABASE_URL && CONFIG.DATABASE_URL.startsWith('postgresql://')) {
       }
     };
 
-    // Run migrations
     createTables().catch(err => {
       logger.error('Failed to initialize database:', err);
     });
 
-    // Health check
     dbHealthCheck = setInterval(async () => {
       try {
         await queryWithTimeout('SELECT 1', [], { timeout: 2000 });
         
-        // Update connection pool metrics
         const poolStats = {
           total: dbPool.totalCount,
           idle: dbPool.idleCount,
@@ -2221,7 +2466,6 @@ if (CONFIG.DATABASE_URL && CONFIG.DATABASE_URL.startsWith('postgresql://')) {
   logger.info('📁 Running without database (file-based logging only)');
 }
 
-// Database utility functions
 async function logToDatabase(entry) {
   if (!dbPool) return;
   
@@ -2238,7 +2482,6 @@ async function logToDatabase(entry) {
 }
 
 async function updateAnalytics(type, data) {
-  // Update metrics
   if (type === 'request') {
     totalRequests.inc({ 
       method: data.method || 'GET', 
@@ -2263,7 +2506,6 @@ async function updateAnalytics(type, data) {
       [type, JSON.stringify(data)]
     );
     
-    // Update daily stats
     const today = new Date().toISOString().split('T')[0];
     await queryWithTimeout(`
       INSERT INTO daily_stats (date, total_requests, unique_visitors, bot_blocks, links_created, clicks, data)
@@ -2290,8 +2532,7 @@ async function updateAnalytics(type, data) {
   }
 }
 
-// ==================== ADD getAllLinks FUNCTION HERE ====================
-// ✅ GET ALL LINKS FUNCTION (MUST BE BEFORE SOCKET.IO)
+// ==================== GET ALL LINKS FUNCTION ====================
 async function getAllLinks() {
   if (!dbPool) {
     const keys = linkCache.keys();
@@ -2366,7 +2607,6 @@ const io = new Server(server, {
   }) : undefined
 });
 
-// Redis pub/sub for cross-instance communication
 if (subscriber) {
   subscriber.subscribe('redirector:events', (err, count) => {
     if (err) {
@@ -2388,11 +2628,9 @@ if (subscriber) {
   });
 }
 
-// Socket.IO namespaces
 const adminNamespace = io.of('/admin');
 const publicNamespace = io.of('/public');
 
-// Admin namespace authentication
 adminNamespace.use((socket, next) => {
   const token = socket.handshake.auth.token;
   const sessionId = socket.handshake.auth.sessionId;
@@ -2402,7 +2640,6 @@ adminNamespace.use((socket, next) => {
     return next();
   }
   
-  // Check session
   if (sessionId) {
     sessionStore.get(sessionId, (err, session) => {
       if (err || !session || !session.authenticated) {
@@ -2418,11 +2655,9 @@ adminNamespace.use((socket, next) => {
   logger.info('Admin client connected:', socket.id);
   activeConnections.labels('admin').inc();
   
-  // Send initial data
   socket.emit('stats', stats);
   socket.emit('config', getConfigForClient());
   
-  // Get all links
   getAllLinks().then(links => {
     socket.emit('links', links);
   }).catch(err => {
@@ -2446,7 +2681,6 @@ adminNamespace.use((socket, next) => {
   });
 });
 
-// Public namespace (for real-time updates)
 publicNamespace.on('connection', (socket) => {
   activeConnections.labels('public').inc();
   
@@ -2464,14 +2698,13 @@ const apiVersionManager = new APIVersionManager();
 app.set('trust proxy', CONFIG.TRUST_PROXY);
 app.use(compression({ 
   level: 6, 
-  threshold: 1024, // Only compress responses > 1KB
+  threshold: 1024,
   filter: (req, res) => {
     if (req.headers['x-no-compression']) return false;
     return compression.filter(req, res);
   }
 }));
 
-// Request logging with Morgan
 app.use(morgan(CONFIG.LOG_FORMAT === 'json' ? 'combined' : 'dev', { 
   stream: { 
     write: message => {
@@ -2480,9 +2713,8 @@ app.use(morgan(CONFIG.LOG_FORMAT === 'json' ? 'combined' : 'dev', {
   } 
 }));
 
-// Static files with caching
 app.use(express.static('public', { 
-  maxAge: '7d', // Increased from 1d
+  maxAge: '7d',
   etag: true,
   lastModified: true,
   immutable: true,
@@ -2496,12 +2728,10 @@ app.use(express.static('public', {
   }
 }));
 
-// Request ID middleware
 app.use((req, res, next) => {
   req.id = req.headers['x-request-id'] || uuidv4();
   res.setHeader('X-Request-ID', req.id);
   
-  // Create request context
   sessionNamespace.run(() => {
     sessionNamespace.set('id', req.id);
     sessionNamespace.set('ip', req.ip);
@@ -2528,13 +2758,10 @@ app.use(cors({
 }));
 app.use(cookieParser(CONFIG.SESSION_SECRET));
 
-// Request signing middleware
 app.use(requestSigner.signRequest.bind(requestSigner));
 
-// Apply signature verification to sensitive endpoints
 app.use('/api/v2/*', requestSigner.requireSignature(['/api/v2/generate', '/api/v2/bulk']));
 
-// Session configuration
 const sessionConfig = {
   store: sessionStore,
   secret: CONFIG.SESSION_SECRET,
@@ -2556,7 +2783,6 @@ const sessionConfig = {
   }
 };
 
-// Add session absolute timeout
 const sessionAbsoluteTimeout = (req, res, next) => {
   if (req.session && req.session.createdAt) {
     const age = Date.now() - req.session.createdAt;
@@ -2575,7 +2801,6 @@ const sessionAbsoluteTimeout = (req, res, next) => {
 app.use(session(sessionConfig));
 app.use(sessionAbsoluteTimeout);
 
-// Session rotation middleware
 app.use((req, res, next) => {
   if (req.session && req.session.authenticated) {
     const lastRotation = req.session.lastRotation || 0;
@@ -2590,7 +2815,6 @@ app.use((req, res, next) => {
         req.session.authenticated = true;
         req.session.user = req.session.user;
         
-        // Log session rotation
         if (dbPool) {
           queryWithTimeout(
             'INSERT INTO user_sessions (session_id, user_id, ip, user_agent) VALUES ($1, $2, $3, $4) ON CONFLICT (session_id) DO UPDATE SET created_at = NOW()',
@@ -2609,7 +2833,6 @@ app.use((req, res, next) => {
   }
 });
 
-// ─── Security Middleware - Block URL Parameters with Credentials ───────────
 app.use((req, res, next) => {
   const sensitiveParams = ['username', 'password', 'pass', 'pwd', 'secret', 'api_key', 'apikey', 'token', 'auth', 'mfaCode', 'backupCode'];
   const hasSensitiveParam = sensitiveParams.some(param => 
@@ -2619,8 +2842,7 @@ app.use((req, res, next) => {
   if (hasSensitiveParam) {
     logger.warn('🚫 Blocked request with credentials in URL', {
       ip: req.ip,
-      path: req.path,
-      query: Object.keys(req.query).filter(k => sensitiveParams.includes(k))
+      path: req.path
     });
     
     if (dbPool) {
@@ -2645,7 +2867,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// ─── CSRF Protection with Double Submit Cookie ────────────────────────────
 app.use((req, res, next) => {
   if (!req.session.csrfToken) {
     req.session.csrfToken = crypto.randomBytes(32).toString('hex');
@@ -2655,7 +2876,7 @@ app.use((req, res, next) => {
     secure: CONFIG.NODE_ENV === 'production',
     httpOnly: false,
     sameSite: 'lax',
-    maxAge: 3600000 // 1 hour
+    maxAge: 3600000
   });
   
   res.locals.csrfToken = req.session.csrfToken;
@@ -2706,7 +2927,6 @@ const csrfProtection = (req, res, next) => {
   next();
 };
 
-// ─── Input Validation Middleware ─────────────────────────────────────────
 app.use((req, res, next) => {
   try {
     if (req.body && Object.keys(req.body).length > 0) {
@@ -2724,7 +2944,6 @@ app.use((req, res, next) => {
   }
 });
 
-// ─── Bull Board Middleware ────────────────────────────────────────────────
 if (serverAdapter && CONFIG.BULL_BOARD_ENABLED) {
   app.use(CONFIG.BULL_BOARD_PATH, (req, res, next) => {
     if (!req.session.authenticated) {
@@ -2747,14 +2966,12 @@ const HOST = CONFIG.HOST;
 const ADMIN_USERNAME = CONFIG.ADMIN_USERNAME;
 const ADMIN_PASSWORD_HASH = CONFIG.ADMIN_PASSWORD_HASH;
 
-// Link mode configuration
 let LINK_LENGTH_MODE = CONFIG.LINK_LENGTH_MODE;
 let ALLOW_LINK_MODE_SWITCH = CONFIG.ALLOW_LINK_MODE_SWITCH;
 let LONG_LINK_SEGMENTS = CONFIG.LONG_LINK_SEGMENTS;
 let LONG_LINK_PARAMS = CONFIG.LONG_LINK_PARAMS;
 let LINK_ENCODING_LAYERS = CONFIG.LINK_ENCODING_LAYERS;
 
-// Enhanced encoding options
 let ENABLE_COMPRESSION = CONFIG.ENABLE_COMPRESSION;
 let ENABLE_ENCRYPTION = CONFIG.ENABLE_ENCRYPTION;
 let MAX_ENCODING_ITERATIONS = CONFIG.MAX_ENCODING_ITERATIONS;
@@ -2801,12 +3018,11 @@ function formatDuration(seconds) {
   return hours > 0 ? `${days} day${days !== 1 ? 's' : ''} ${hours} hour${hours !== 1 ? 's' : ''}` : `${days} day${days !== 1 ? 's' : ''}`;
 }
 
-// Cache instances with optimized settings
 const geoCache = new NodeCache({ 
   stdTTL: 86400, 
   checkperiod: 3600, 
   useClones: false, 
-  maxKeys: 10000, // Reduced from 100000
+  maxKeys: 10000,
   deleteOnExpire: true,
   errorOnMissing: false
 });
@@ -2815,7 +3031,7 @@ const linkCache = new NodeCache({
   stdTTL: LINK_TTL_SEC, 
   checkperiod: Math.min(300, Math.floor(LINK_TTL_SEC * CONFIG.CACHE_CHECK_PERIOD_FACTOR)), 
   useClones: false, 
-  maxKeys: 100000, // Reduced from MAX_LINKS
+  maxKeys: 100000,
   deleteOnExpire: true,
   errorOnMissing: false
 });
@@ -2840,7 +3056,7 @@ const deviceCache = new NodeCache({
   stdTTL: 300, 
   checkperiod: 60, 
   useClones: false, 
-  maxKeys: 5000, // Reduced from 50000
+  maxKeys: 5000,
   errorOnMissing: false
 });
 
@@ -2861,13 +3077,12 @@ const encodingCache = new NodeCache({
 });
 
 const nonceCache = new NodeCache({ 
-  stdTTL: 300, // 5 minutes
+  stdTTL: 300,
   checkperiod: 60,
   maxKeys: 10000,
   useClones: false
 });
 
-// Cache monitoring
 const cacheStats = {
   geo: { hits: 0, misses: 0 },
   link: { hits: 0, misses: 0 },
@@ -2878,7 +3093,6 @@ const cacheStats = {
   nonce: { hits: 0, misses: 0 }
 };
 
-// Wrap cache get with stats
 const cacheGet = (cache, name, key) => {
   const value = cache.get(key);
   if (value !== undefined) {
@@ -2895,7 +3109,6 @@ const cacheSet = (cache, name, key, value, ttl) => {
   cache.set(key, value, ttl);
 };
 
-// Login attempt tracking
 const loginAttempts = redisClient ? new Map() : new Map();
 
 setInterval(() => {
@@ -2907,7 +3120,6 @@ setInterval(() => {
   }
 }, 3600000);
 
-// Stats Tracking
 const stats = {
   totalRequests: 0,
   botBlocks: 0,
@@ -2982,68 +3194,48 @@ const stats = {
     detected: false,
     growthRate: 0,
     lastSnapshot: Date.now()
+  },
+  circuitBreakers: {
+    opens: 0,
+    closes: 0,
+    rejects: 0,
+    timeouts: 0
   }
 };
 
-// Memory leak detection
-const memLeakDetection = {
-  snapshots: [],
-  takeSnapshot() {
-    const mem = process.memoryUsage();
-    this.snapshots.push({
-      timestamp: Date.now(),
-      heapUsed: mem.heapUsed,
-      heapTotal: mem.heapTotal,
-      external: mem.external,
-      rss: mem.rss
-    });
+const memoryLeakDetector = new MemoryLeakDetector({
+  growthThreshold: 10,
+  heapdumpEnabled: CONFIG.NODE_ENV === 'development',
+  autoGC: true
+});
+
+global.intervals.memLeakDetection = setInterval(() => {
+  const analysis = memoryLeakDetector.takeSnapshot();
+  if (analysis) {
+    stats.memoryLeak.detected = analysis.detected;
+    stats.memoryLeak.growthRate = analysis.growthRate;
+    memoryLeakDetected.labels('detected').set(analysis.detected ? 1 : 0);
     
-    // Keep last 10 snapshots
-    if (this.snapshots.length > 10) this.snapshots.shift();
-    
-    // Check growth rate
-    if (this.snapshots.length >= 5) {
-      const oldest = this.snapshots[0];
-      const newest = this.snapshots[this.snapshots.length - 1];
-      const timeDiff = (newest.timestamp - oldest.timestamp) / 1000; // seconds
-      const growth = (newest.heapUsed - oldest.heapUsed) / 1024 / 1024; // MB
+    if (analysis.detected && analysis.severity === 'critical') {
+      logger.error('Critical memory leak detected!', analysis);
       
-      if (timeDiff > 60 && growth > 10) { // >10MB growth in 1 minute
-        logger.error('Potential memory leak detected', {
-          growthMB: growth.toFixed(2),
-          timeSeconds: timeDiff.toFixed(0),
-          currentHeap: (newest.heapUsed / 1024 / 1024).toFixed(2) + 'MB'
-        });
-        
-        stats.memoryLeak.detected = true;
-        stats.memoryLeak.growthRate = growth / timeDiff;
-        memoryLeakDetected.labels('detected').set(1);
-        
-        // Force garbage collection if available
-        if (global.gc) {
-          global.gc();
-          logger.info('Forced garbage collection executed');
-        }
-        
-        // Clear caches aggressively
-        deviceCache.flushAll();
-        geoCache.flushAll();
-        qrCache.flushAll();
-        if (stats.memoryLeak.growthRate > 1) {
-          linkCache.flushAll();
-          encodingCache.flushAll();
-        }
-      } else {
-        stats.memoryLeak.detected = false;
-        memoryLeakDetected.labels('detected').set(0);
+      if (analysis.heapPercent > 0.95 && global.gc) {
+        global.gc();
+        logger.info('Forced garbage collection due to memory leak');
+      }
+      
+      deviceCache.flushAll();
+      geoCache.flushAll();
+      qrCache.flushAll();
+      
+      if (analysis.growthRate > 20) {
+        linkCache.flushAll();
+        encodingCache.flushAll();
       }
     }
-    
-    stats.memoryLeak.lastSnapshot = Date.now();
   }
-};
+}, 60000);
 
-// Memory monitoring - FIXED: Using global.intervals
 global.intervals.memoryMonitor = setInterval(() => {
   const memUsage = process.memoryUsage();
   stats.realtime.currentMemory = memUsage.heapUsed;
@@ -3076,12 +3268,8 @@ global.intervals.memoryMonitor = setInterval(() => {
       percent: heapUsedPercent
     });
   }
-  
-  // Take memory snapshot for leak detection
-  memLeakDetection.takeSnapshot();
 }, 5000);
 
-// CPU monitoring
 let lastCPUUsage = process.cpuUsage();
 global.intervals.cpuMonitor = setInterval(() => {
   const cpuUsage = process.cpuUsage(lastCPUUsage);
@@ -3100,13 +3288,11 @@ global.intervals.cpuMonitor = setInterval(() => {
   }
 }, 5000);
 
-// Cache cleanup on high memory
 global.intervals.cacheCleanup = setInterval(() => {
   const memUsage = process.memoryUsage().heapUsed / 1024 / 1024;
-  if (memUsage > 80) { // If over 80MB
+  if (memUsage > 80) {
     logger.warn('High memory, clearing caches', { memUsageMB: memUsage.toFixed(2) });
     
-    // Clear least recently used caches first
     deviceCache.flushAll();
     geoCache.flushAll();
     qrCache.flushAll();
@@ -3117,16 +3303,12 @@ global.intervals.cacheCleanup = setInterval(() => {
       nonceCache.flushAll();
     }
     
-    if (memUsage > 120) {
-      // Force garbage collection if available
-      if (global.gc) {
-        global.gc();
-      }
+    if (memUsage > 120 && global.gc) {
+      global.gc();
     }
   }
 }, 60000);
 
-// Admin command handler
 async function handleAdminCommand(cmd, socket) {
   switch(cmd.action) {
     case 'clearCache':
@@ -3204,6 +3386,13 @@ async function handleAdminCommand(cmd, socket) {
       }
       break;
       
+    case 'getCircuitBreakers':
+      socket.emit('circuitBreakers', {
+        status: breakerMonitor.getStatus(),
+        metrics: breakerMonitor.getMetrics()
+      });
+      break;
+      
     default:
       socket.emit('notification', { type: 'error', message: 'Unknown command' });
   }
@@ -3226,7 +3415,7 @@ function getConfigForClient() {
     maxEncodingIterations: MAX_ENCODING_ITERATIONS,
     encodingComplexityThreshold: ENCODING_COMPLEXITY_THRESHOLD,
     uptime: process.uptime(),
-    version: '4.2.0', // Upgraded version
+    version: '4.2.0',
     nodeEnv: NODE_ENV,
     databaseEnabled: !!dbPool,
     redisEnabled: !!redisClient,
@@ -3234,11 +3423,11 @@ function getConfigForClient() {
     keyRotationEnabled: !!keyManager,
     apiVersions: CONFIG.SUPPORTED_API_VERSIONS,
     requestSigning: true,
-    memoryLeakDetection: stats.memoryLeak.detected
+    memoryLeakDetection: stats.memoryLeak.detected,
+    circuitBreakers: Object.keys(breakerMonitor.getStatus())
   };
 }
 
-// Update realtime stats
 global.intervals.statsUpdate = setInterval(() => {
   stats.realtime.activeLinks = linkCache.keys().length;
   
@@ -3288,7 +3477,6 @@ global.intervals.statsUpdate = setInterval(() => {
   io.of('/admin').emit('stats', stats);
 }, 1000);
 
-// Calculate percentiles
 global.intervals.percentileCalculation = setInterval(() => {
   if (stats.performance.responseTimes.length > 0) {
     const sorted = [...stats.performance.responseTimes].sort((a, b) => a - b);
@@ -3303,7 +3491,6 @@ global.intervals.percentileCalculation = setInterval(() => {
   }
 }, 60000);
 
-// Device Detection
 function getDeviceInfo(req) {
   const ua = req.headers['user-agent'] || '';
   
@@ -3401,7 +3588,6 @@ function getDeviceInfo(req) {
   return deviceInfo;
 }
 
-// Custom Error Class
 class AppError extends Error {
   constructor(message, statusCode, code = 'INTERNAL_ERROR', isOperational = true) {
     super(message);
@@ -3442,7 +3628,6 @@ class BotDetectionError extends AppError {
   }
 }
 
-// Request middleware
 app.use((req, res, next) => {
   sessionNamespace.set('id', req.id);
   sessionNamespace.set('ip', req.ip);
@@ -3501,7 +3686,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Response time tracking
 app.use(responseTime((req, res, time) => {
   if (req.route?.path) {
     httpRequestDurationMicroseconds
@@ -3529,7 +3713,6 @@ app.use(responseTime((req, res, time) => {
   }
 }));
 
-// Helmet configuration
 const helmetConfig = {
   contentSecurityPolicy: CONFIG.CSP_ENABLED ? {
     directives: {
@@ -3603,11 +3786,11 @@ const helmetConfig = {
 
 app.use(helmet(helmetConfig));
 
-// Body parsers with limits
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
-// Rate Limiting
+app.use(requestTimeout(CONFIG.REQUEST_TIMEOUT));
+
 const speedLimiter = slowDown({
   windowMs: 15 * 60 * 1000,
   delayAfter: 50,
@@ -3660,10 +3843,9 @@ app.use(speedLimiter);
 app.use(rateLimiterMiddleware);
 app.use('/api/', apiLimiter);
 
-// Login rate limiter (strict)
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 attempts per 15 minutes
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   skipSuccessfulRequests: true,
   keyGenerator: (req) => req.ip,
   handler: (req, res) => {
@@ -3682,7 +3864,6 @@ const loginLimiter = rateLimit({
   }
 });
 
-// Logging Helper
 async function logRequest(type, req, res, extra = {}) {
   try {
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
@@ -3713,7 +3894,6 @@ async function logRequest(type, req, res, extra = {}) {
   }
 }
 
-// Bot Detection
 function isLikelyBot(req) {
   const deviceInfo = req.deviceInfo;
   
@@ -3800,7 +3980,6 @@ function isLikelyBot(req) {
   return isBot;
 }
 
-// Geolocation
 async function getCountryCode(req) {
   const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || '0.0.0.0';
   
@@ -3822,7 +4001,7 @@ async function getCountryCode(req) {
 
     const response = await fetch(`https://ipinfo.io/${ip}/json?token=${IPINFO_TOKEN}`, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'Redirector-Pro/4.2' } // Updated version
+      headers: { 'User-Agent': 'Redirector-Pro/4.2' }
     });
 
     clearTimeout(timeout);
@@ -4022,7 +4201,7 @@ function advancedMultiLayerEncode(str, options = {}) {
     iterations: iterations,
     complexity: 0,
     timestamp: Date.now(),
-    version: '4.2.0' // Updated version
+    version: '4.2.0'
   };
   
   for (let iteration = 0; iteration < iterations; iteration++) {
@@ -4121,7 +4300,6 @@ function advancedMultiLayerDecode(encoded, metadata) {
   }
 }
 
-// Encoding result cache
 const encodingResultCache = new NodeCache({ 
   stdTTL: 300, 
   checkperiod: 60,
@@ -4131,7 +4309,6 @@ const encodingResultCache = new NodeCache({
 async function generateLongLink(targetUrl, req, options = {}) {
   const startTime = performance.now();
   
-  // Check cache first
   const cacheKey = crypto.createHash('sha256')
     .update(targetUrl + JSON.stringify(options) + req.ip)
     .digest('hex');
@@ -4267,7 +4444,6 @@ async function generateLongLink(targetUrl, req, options = {}) {
 
   cacheSet(encodingCache, 'encoding', cacheKey2, result, 3600);
   
-  // Cache for frequent requests
   if (!targetUrl.includes('private') && !targetUrl.includes('internal')) {
     encodingResultCache.set(cacheKey, result);
   }
@@ -4363,7 +4539,6 @@ async function decodeLongLink(req) {
   }
 }
 
-// Health Endpoints
 app.get(['/ping','/health','/healthz','/status'], (req, res) => {
   const healthData = {
     status: 'healthy',
@@ -4389,12 +4564,12 @@ app.get(['/ping','/health','/healthz','/status'], (req, res) => {
       analytics: analyticsQueue ? 'ready' : 'disabled',
       encoding: encodingQueue ? 'ready' : 'disabled'
     },
-    encryption: keyManager?.initialized ? 'enabled' : 'disabled'
+    encryption: keyManager?.initialized ? 'enabled' : 'disabled',
+    circuitBreakers: breakerMonitor.getStatus()
   };
   res.status(200).json(healthData);
 });
 
-// Detailed health check
 app.get('/health/full', async (req, res) => {
   if (!req.session.authenticated) {
     throw new AppError('Unauthorized', 401);
@@ -4409,7 +4584,8 @@ app.get('/health/full', async (req, res) => {
     diskSpace: false,
     encryption: false,
     keyRotation: false,
-    memoryLeak: !stats.memoryLeak.detected
+    memoryLeak: !stats.memoryLeak.detected,
+    circuitBreakers: true
   };
   
   if (dbPool) {
@@ -4498,7 +4674,6 @@ app.get('/health/full', async (req, res) => {
   });
 });
 
-// Health check for encoding system
 app.get('/health/encoding', (req, res) => {
   const testString = 'https://test.com';
   const start = performance.now();
@@ -4524,7 +4699,6 @@ app.get('/health/encoding', (req, res) => {
   }
 });
 
-// Metrics Endpoint
 app.get('/metrics', async (req, res) => {
   const apiKey = req.headers['x-api-key'] || req.query.key;
   if (apiKey !== METRICS_API_KEY) {
@@ -4567,6 +4741,7 @@ app.get('/metrics', async (req, res) => {
     signatures: stats.signatures,
     apiVersions: stats.apiVersions,
     memoryLeak: stats.memoryLeak,
+    circuitBreakers: breakerMonitor.getMetrics(),
     prometheus: await register.metrics()
   };
   
@@ -4574,7 +4749,6 @@ app.get('/metrics', async (req, res) => {
   res.send(await register.metrics());
 });
 
-// ─── API Version 1 Routes (Original) ─────────────────────────────────────
 const v1Router = express.Router();
 
 v1Router.post('/generate', csrfProtection, encodingLimiter, async (req, res, next) => {
@@ -4823,10 +4997,8 @@ v1Router.get('/stats/:id', validateLinkId, async (req, res, next) => {
   }
 });
 
-// ─── API Version 2 Routes (Enhanced) ─────────────────────────────────────
 const v2Router = express.Router();
 
-// Apply enhanced validation and signing to v2 routes
 v2Router.use(requestSigner.verifySignature);
 v2Router.use((req, res, next) => {
   req.apiVersion = 'v2';
@@ -5293,7 +5465,6 @@ v2Router.get('/health/encryption', async (req, res) => {
   });
 });
 
-// Register API versions
 apiVersionManager.registerVersion('v1', v1Router, {
   deprecated: false,
   description: 'Original API version with basic functionality'
@@ -5304,23 +5475,19 @@ apiVersionManager.registerVersion('v2', v2Router, {
   description: 'Enhanced API with bulk operations, improved response format, request signing, and encryption support'
 });
 
-// Version-specific middleware
 apiVersionManager.registerMiddleware('v2', (req, res, next) => {
   res.setHeader('X-API-Enhanced', 'true');
   next();
 });
 
-// Apply versioning middleware
 app.use('/api', apiVersionManager.versionMiddleware({ 
   strict: CONFIG.API_VERSION_STRICT, 
   warnOnDeprecated: true 
 }));
 
-// Mount versioned routers
 app.use('/api/v1', v1Router);
 app.use('/api/v2', v2Router);
 
-// Version info endpoint
 app.get('/api/versions', (req, res) => {
   res.json({
     current: req.apiVersion || apiVersionManager.getLatestVersion(),
@@ -5330,13 +5497,11 @@ app.get('/api/versions', (req, res) => {
   });
 });
 
-// Original /api/generate endpoint (redirects to v1)
 app.post('/api/generate', csrfProtection, encodingLimiter, (req, res, next) => {
   req.url = '/api/v1/generate';
   app._router.handle(req, res, next);
 });
 
-// Key management endpoints (admin only)
 app.get('/admin/keys', async (req, res) => {
   if (!req.session.authenticated) {
     throw new AppError('Unauthorized', 401);
@@ -5399,7 +5564,6 @@ app.post('/admin/keys/cleanup', async (req, res) => {
   });
 });
 
-// Original routes (for backward compatibility)
 app.get('/g', (req, res, next) => {
   req.body = { url: req.query.t };
   app._router.handle(req, res, next);
@@ -5551,7 +5715,6 @@ app.get('/r/*', strictLimiter, async (req, res, next) => {
   }
 });
 
-// Delete Link
 app.delete('/api/links/:id', csrfProtection, validateLinkId, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -5593,7 +5756,6 @@ app.delete('/api/links/:id', csrfProtection, validateLinkId, async (req, res, ne
   }
 });
 
-// Update Link
 app.put('/api/links/:id', csrfProtection, validateLinkId, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -5644,7 +5806,6 @@ app.put('/api/links/:id', csrfProtection, validateLinkId, async (req, res, next)
   }
 });
 
-// Get Settings
 app.get('/api/settings', async (req, res, next) => {
   try {
     if (!req.session.authenticated) {
@@ -5706,7 +5867,8 @@ app.get('/api/settings', async (req, res, next) => {
       apiVersions: CONFIG.SUPPORTED_API_VERSIONS,
       defaultApiVersion: CONFIG.DEFAULT_API_VERSION,
       
-      memoryLeakDetection: stats.memoryLeak.detected
+      memoryLeakDetection: stats.memoryLeak.detected,
+      circuitBreakers: Object.keys(breakerMonitor.getStatus())
     };
     
     if (dbPool) {
@@ -5722,7 +5884,6 @@ app.get('/api/settings', async (req, res, next) => {
   }
 });
 
-// Update Settings
 app.post('/api/settings', csrfProtection, async (req, res, next) => {
   try {
     if (!req.session.authenticated) {
@@ -5807,7 +5968,6 @@ app.post('/api/settings', csrfProtection, async (req, res, next) => {
   }
 });
 
-// Update link mode settings
 app.post('/api/settings/link-mode', csrfProtection, async (req, res, next) => {
   try {
     if (!req.session.authenticated) {
@@ -5994,7 +6154,6 @@ app.post('/api/settings/link-mode', csrfProtection, async (req, res, next) => {
   }
 });
 
-// Test endpoint to compare short vs long links
 app.get('/api/test/link-modes', async (req, res, next) => {
   try {
     if (!req.session.authenticated) {
@@ -6065,7 +6224,6 @@ app.get('/api/test/link-modes', async (req, res, next) => {
   }
 });
 
-// Success Tracking
 app.post('/track/success', (req, res) => {
   stats.successfulRedirects++;
   logRequest('success', req, res);
@@ -6078,7 +6236,6 @@ app.post('/track/success', (req, res) => {
   res.json({ ok: true });
 });
 
-// Password Protected Link Verification
 app.post('/v/:id/verify', express.json(), validateLinkId, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -6141,7 +6298,6 @@ app.post('/v/:id/verify', express.json(), validateLinkId, async (req, res, next)
   }
 });
 
-// Verification Gate with Password Protection
 app.get('/v/:id', strictLimiter, validateLinkId, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -6357,7 +6513,6 @@ app.get('/v/:id', strictLimiter, validateLinkId, async (req, res, next) => {
   }
 });
 
-// Helper functions for pages
 function passwordProtectedPage(linkId, error, nonce) {
   return `
     <!DOCTYPE html>
@@ -6513,7 +6668,6 @@ function qrCodePage(target, qrData, nonce) {
   `;
 }
 
-// Expired Link Page
 app.get('/expired', (req, res) => {
   const originalTarget = req.query.target || BOT_URLS[0];
   const nonce = res.locals.nonce;
@@ -6546,7 +6700,6 @@ app.get('/expired', (req, res) => {
 </html>`);
 });
 
-// QR Code Endpoints
 app.get('/qr', async (req, res, next) => {
   try {
     const url = req.query.url || req.query.u || TARGET_URL;
@@ -6620,7 +6773,6 @@ app.get('/qr/download', async (req, res, next) => {
   }
 });
 
-// Admin Routes - Serve HTML
 app.get('/admin/login', (req, res) => {
   if (Object.keys(req.query).length > 0) {
     logger.warn('🚫 Blocked login attempt with query params', { 
@@ -6766,7 +6918,6 @@ app.post('/admin/login', loginLimiter, csrfProtection, express.json(), async (re
   }
 });
 
-// Main Admin Dashboard
 app.get('/admin', async (req, res, next) => {
   if (!req.session.authenticated) {
     return res.redirect('/admin/login');
@@ -6880,7 +7031,6 @@ app.get('/admin/export-logs', async (req, res, next) => {
   }
 });
 
-// Export link data
 app.get('/api/export/:id', validateLinkId, async (req, res, next) => {
   try {
     const linkId = req.params.id;
@@ -6925,7 +7075,6 @@ app.get('/api/export/:id', validateLinkId, async (req, res, next) => {
   }
 });
 
-// Security monitoring endpoint
 app.get('/admin/security/monitor', async (req, res) => {
   if (!req.session.authenticated) {
     throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
@@ -6993,11 +7142,11 @@ app.get('/admin/security/monitor', async (req, res) => {
       duration: CONFIG.RATE_LIMIT_WINDOW / 1000
     },
     signatureStats: stats.signatures,
-    memoryLeak: stats.memoryLeak
+    memoryLeak: stats.memoryLeak,
+    circuitBreakers: breakerMonitor.getStatus()
   });
 });
 
-// Configuration reload endpoint
 app.post('/admin/reload-config', csrfProtection, async (req, res) => {
   if (!req.session.authenticated) {
     throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
@@ -7021,7 +7170,6 @@ app.post('/admin/reload-config', csrfProtection, async (req, res) => {
   }
 });
 
-// Force garbage collection endpoint (admin only)
 app.post('/admin/force-gc', csrfProtection, (req, res) => {
   if (!req.session.authenticated) {
     throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
@@ -7039,7 +7187,17 @@ app.post('/admin/force-gc', csrfProtection, (req, res) => {
   }
 });
 
-// Swagger documentation
+app.get('/admin/circuit-breakers', (req, res) => {
+  if (!req.session.authenticated) {
+    throw new AppError('Unauthorized', 401);
+  }
+  
+  res.json({
+    status: breakerMonitor.getStatus(),
+    metrics: breakerMonitor.getMetrics()
+  });
+});
+
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -7100,19 +7258,16 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
   customSiteTitle: 'Redirector Pro API Docs'
 }));
 
-// CSP violation report endpoint
 app.post('/report-ct-violation', express.json({ type: 'application/csp-report' }), (req, res) => {
   logger.warn('CSP violation:', req.body);
   res.status(204).end();
 });
 
-// 404 Handler
 app.use((req, res) => {
   logRequest('404', req, res);
   res.redirect(BOT_URLS[Math.floor(Math.random() * BOT_URLS.length)]);
 });
 
-// Global Error Handler
 app.use((err, req, res, next) => {
   const errorId = uuidv4();
   
@@ -7225,7 +7380,6 @@ async function gracefulShutdown(signal) {
   }, 30000);
   
   try {
-    // Close server with timeout
     await new Promise((resolve) => {
       const serverCloseTimeout = setTimeout(() => {
         logger.warn('Server close timeout, forcing...');
@@ -7239,7 +7393,6 @@ async function gracefulShutdown(signal) {
       });
     });
     
-    // Close Socket.IO
     await new Promise((resolve) => {
       const ioCloseTimeout = setTimeout(() => {
         logger.warn('Socket.IO close timeout');
@@ -7253,13 +7406,11 @@ async function gracefulShutdown(signal) {
       });
     });
     
-    // Clear all intervals
     Object.values(global.intervals).forEach(interval => {
       if (interval) clearInterval(interval);
     });
     logger.info('All intervals cleared');
     
-    // Close queues
     const queueCloses = [];
     [redirectQueue, emailQueue, analyticsQueue, encodingQueue].forEach(q => {
       if (q) queueCloses.push(q.close().catch(e => logger.error('Queue close error:', e)));
@@ -7267,14 +7418,16 @@ async function gracefulShutdown(signal) {
     await Promise.all(queueCloses);
     logger.info('Queues closed');
     
-    // Close database
     if (dbPool) {
-      await dbPool.end();
+      if (dbManager) {
+        await dbManager.shutdown();
+      } else {
+        await dbPool.end();
+      }
       if (dbHealthCheck) clearInterval(dbHealthCheck);
       logger.info('Database closed');
     }
     
-    // Close Redis
     const redisCloses = [];
     if (redisClient) redisCloses.push(redisClient.quit().catch(e => logger.error('Redis quit error:', e)));
     if (subscriber) redisCloses.push(subscriber.quit().catch(e => logger.error('Subscriber quit error:', e)));
@@ -7303,7 +7456,6 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Create necessary directories
 async function ensureDirectories() {
   const dirs = ['logs', 'public', 'backups', 'temp', 'uploads', 'heapdumps', 'data', 'data/keys'];
   for (const dir of dirs) {
@@ -7317,7 +7469,6 @@ async function ensureDirectories() {
   }
 }
 
-// Backup function
 async function performBackup() {
   if (!CONFIG.AUTO_BACKUP_ENABLED || !dbPool) return;
   
@@ -7361,12 +7512,14 @@ async function performBackup() {
   }
 }
 
-// Start Server
 async function startServer() {
   try {
     await ensureDirectories();
     
-    // Initialize key manager
+    if (dbPool) {
+      await dbManager?.initialize();
+    }
+    
     if (ENABLE_ENCRYPTION) {
       keyManager = new EncryptionKeyManager();
       await keyManager.initialize();
@@ -7388,23 +7541,17 @@ async function startServer() {
       performBackup();
     }
     
-    // ✅ CRITICAL FIX: Proper PORT handling with validation
     const PORT = process.env.PORT;
     
-    // Validate PORT exists and is valid
     if (!PORT || isNaN(parseInt(PORT, 10))) {
       console.error('\n❌ CRITICAL ERROR: PORT environment variable is not set or invalid!');
       console.error('Expected: process.env.PORT should be a valid port number');
       console.error('Received: PORT =', PORT);
-      console.error('\nRender automatically sets this. Check:');
-      console.error('1. Service configuration in Render dashboard');
-      console.error('2. Environment variables are properly set');
-      console.error('3. Restart the service after making changes\n');
       process.exit(1);
     }
     
     const port = parseInt(PORT, 10);
-    const host = '0.0.0.0';  // Always bind to all interfaces for Render
+    const host = '0.0.0.0';
     
     console.log('\n' + '='.repeat(100));
     console.log('🔧 SERVER STARTUP SEQUENCE');
@@ -7417,7 +7564,6 @@ async function startServer() {
     console.log(`🔹 Memory Leak Detection: ${global.gc ? 'Enabled (--expose-gc)' : 'Disabled (run with --expose-gc for better memory management)'}`);
     console.log('='.repeat(100) + '\n');
     
-    // Create a promise-based listen with comprehensive error handling
     await new Promise((resolve, reject) => {
       server.listen(port, host)
         .once('listening', () => {
@@ -7440,7 +7586,7 @@ async function startServer() {
           console.log(`🔄 Redis: ${redisClient?.status === 'ready' ? '✅ Connected' : '⚠️ Disabled'}`);
           console.log(`📨 Queues: ${redirectQueue ? '✅ Enabled' : '⚠️ Disabled'}`);
           console.log(`🗄️  Transactions: ${txManager ? '✅ Enabled' : '⚠️ Disabled'}`);
-          console.log(`🛡️  Circuit Breakers: ✅ Enabled`);
+          console.log(`🛡️  Circuit Breakers: ✅ Enabled (${Object.keys(breakerMonitor.getStatus()).length})`);
           console.log(`📈 Prometheus Metrics: ${CONFIG.METRICS_ENABLED ? '✅ Enabled' : '⚠️ Disabled'}`);
           console.log(`🔍 Memory Leak Detection: ✅ Enabled`);
           console.log('='.repeat(100));
@@ -7451,7 +7597,6 @@ async function startServer() {
           }
           console.log('='.repeat(100) + '\n');
           
-          // Log to logger
           logger.info('✅ Server started successfully', {
             port: addr.port,
             host,
@@ -7462,7 +7607,6 @@ async function startServer() {
             timestamp: new Date().toISOString()
           });
           
-          // Write to request log
           fs.appendFile(REQUEST_LOG_FILE, JSON.stringify({
             timestamp: new Date().toISOString(),
             type: 'startup',
@@ -7478,7 +7622,8 @@ async function startServer() {
               database: !!dbPool,
               redis: !!redisClient,
               queues: !!redirectQueue,
-              memoryLeakDetection: !!global.gc
+              memoryLeakDetection: !!global.gc,
+              circuitBreakers: Object.keys(breakerMonitor.getStatus()).length
             }
           }) + '\n').catch(() => {});
           
@@ -7542,7 +7687,6 @@ async function startServer() {
   }
 }
 
-// Add a small delay before starting to ensure everything is ready
 setTimeout(() => {
   console.log('🔧 Initializing server startup sequence...');
   startServer().catch(err => {
@@ -7551,14 +7695,12 @@ setTimeout(() => {
   });
 }, 1000);
 
-// Server configuration
 server.keepAliveTimeout = CONFIG.KEEP_ALIVE_TIMEOUT;
 server.headersTimeout = CONFIG.HEADERS_TIMEOUT;
 server.maxHeadersCount = 1000;
 server.timeout = CONFIG.SERVER_TIMEOUT;
 server.maxConnections = 10000;
 
-// Export for testing
 module.exports = { 
   app, 
   server, 
@@ -7569,5 +7711,8 @@ module.exports = {
   txManager,
   validator,
   requestSigner,
-  apiVersionManager
+  apiVersionManager,
+  breakerMonitor,
+  memoryLeakDetector,
+  dbManager
 };
